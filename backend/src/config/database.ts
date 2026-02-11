@@ -1,4 +1,4 @@
-import { MongoClient, Db} from "mongodb";
+import { MongoClient, Db, Collection, Document } from "mongodb";
 
 let client: MongoClient;
 let database: Db;
@@ -51,4 +51,18 @@ export async function closeDatabaseConnection(): Promise<void> {
   if (client) {
     await client.close();
   }
+}
+
+/**
+ * Gets a reference to a specific collection in the database
+ *
+ * @param collectionName - Name of the collection to access
+ * @returns Collection instance
+ * @throws Error if database is not connected
+ */
+export function getCollection<T extends Document>(collectionName: string): Collection<T> {
+  if (!database) {
+    throw new Error("Database not connected.");
+  }
+  return database.collection(collectionName);
 }

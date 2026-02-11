@@ -7,7 +7,7 @@
         "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
         "build": "tsc",
         "start": "node dist/server.js",
-        "test": "vitest"
+        "test": "vitest --config ./vitest.config.ts --fileParallelism=false"
     },
     "keywords": [],
     "author": "",
@@ -16,7 +16,8 @@
     "dependencies": {
         "cors": "^2.8.6",
         "express": "^5.2.1",
-        "mongodb": "latest"
+        "mongodb": "latest",
+        "argon2": "0.44.0"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",

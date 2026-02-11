@@ -1,12 +1,16 @@
 import express, { Request, Response } from 'express'
 import cors from 'cors'
 import { connectToDatabase, closeDatabaseConnection } from './config/database'
+import authRouter from './routes/auth'
 
 const app = express()
 
 // Middleware
 app.use(cors())
 app.use(express.json())
+
+// Mount auth routes
+app.use('/api/auth', authRouter)
 
 // Load environment variables from the .env file
 const { loadEnvFile } = require('node:process');
