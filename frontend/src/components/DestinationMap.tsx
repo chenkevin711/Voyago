@@ -1,114 +1,52 @@
-import { Alert, Box, CircularProgress, Typography } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { Alert, Box, CircularProgress, Typography } from "@mui/material"
+import { useMemo, useState } from "react"
+import {
+    APIProvider,
+    AdvancedMarker,
+    Map,
+    Pin,
+    InfoWindow
+} from "@vis.gl/react-google-maps"
 
 type Destination = {
-    name: string;
-    position: { lat: number; lng: number };
-};
-
-type GoogleMapsApi = {
-    Map: new (element: HTMLElement, options: Record<string, unknown>) => unknown;
-    Marker: new (options: Record<string, unknown>) => unknown;
-};
-
-declare global {
-    interface Window {
-        google?: {
-            maps?: GoogleMapsApi;
-        };
-    }
+    name: string
+    position: { lat: number; lng: number }
 }
 
 const destinations: Destination[] = [
     { name: "Eiffel Tower", position: { lat: 48.8584, lng: 2.2945 } },
     { name: "Colosseum", position: { lat: 41.8902, lng: 12.4922 } },
     { name: "Sagrada Família", position: { lat: 41.4036, lng: 2.1744 } },
-    { name: "Prague Castle", position: { lat: 50.0911, lng: 14.401 } },
-];
+    { name: "Prague Castle", position: { lat: 50.0911, lng: 14.401 } }
+]
 
-const SCRIPT_ID = "voyago-google-maps-script";
-const apiKey = import.meta.env.GOOGLE_API_KEY as string | undefined;
+const apiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
+const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined
+
+const defaultCenter = { lat: 46.5, lng: 8.4 }
 
 export default function DestinationMap() {
-    const mapRef = useRef<HTMLDivElement | null>(null);
-    const [error, setError] = useState<string | null>(
-        apiKey ? null : "Google Maps key is missing. Add GOOGLE_API_KEY to your .env file.",
-    );
-    const [isLoading, setIsLoading] = useState(Boolean(apiKey));
+    const [loading, setLoading] = useState(Boolean(apiKey))
 
-    useEffect(() => {
-        if (!apiKey) {
-            return;
-        }
+    const [selected, setSelected] = useState<Destination | null>(null)
 
-        let isUnmounted = false;
+    const error = apiKey
+        ? null
+        : "Google Maps key is missing. Add VITE_GOOGLE_API_KEY to your .env file."
 
-        const initializeMap = () => {
-            const googleMaps = window.google?.maps;
-            if (!mapRef.current || !googleMaps) {
-                return;
-            }
-
-            const map = new googleMaps.Map(mapRef.current, {
-                center: { lat: 46.5, lng: 8.4 },
-                zoom: 4,
-                mapTypeControl: false,
-                streetViewControl: false,
-                fullscreenControl: false,
-            });
-
-            destinations.forEach((destination) => {
-                new googleMaps.Marker({
-                    map,
-                    position: destination.position,
-                    title: destination.name,
-                });
-            });
-
-            if (!isUnmounted) {
-                setIsLoading(false);
-            }
-        };
-
-        const existingScript = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
-
-        if (existingScript) {
-            if (window.google?.maps) {
-                initializeMap();
-            } else {
-                existingScript.addEventListener("load", initializeMap, { once: true });
-            }
-            return;
-        }
-
-        const script = document.createElement("script");
-        script.id = SCRIPT_ID;
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
-        script.async = true;
-        script.defer = true;
-
-        script.onload = initializeMap;
-        script.onerror = () => {
-            if (!isUnmounted) {
-                setError("Unable to load Google Maps. Check your API key and billing setup.");
-                setIsLoading(false);
-            }
-        };
-
-        document.head.appendChild(script);
-
-        return () => {
-            isUnmounted = true;
-        };
-    }, []);
+    const mapOptions = useMemo(
+        () => ({
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: false
+        }),
+        []
+    )
 
     return (
         <Box sx={{ mt: 5 }}>
             <Typography sx={{ fontWeight: 700, fontSize: 24, mb: 1.5, color: "primary.main" }}>
                 Explore featured destinations
-            </Typography>
-            <Typography sx={{ color: "text.secondary", mb: 2 }}>
-                Demo map with pinned destinations using the Google Maps JavaScript API.
             </Typography>
 
             {error && <Alert severity="warning">{error}</Alert>}
@@ -119,28 +57,80 @@ export default function DestinationMap() {
                     borderRadius: 4,
                     overflow: "hidden",
                     border: "1px solid rgba(47,65,86,0.12)",
-                    height: { xs: 320, md: 420 },
-                    bgcolor: "rgba(255,255,255,0.5)",
-                    mt: error ? 2 : 0,
+                    height: { xs: 320, md: 420 }
                 }}
             >
-                {isLoading && (
-                    <Box
-                        sx={{
-                            position: "absolute",
-                            inset: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            bgcolor: "rgba(255,255,255,0.75)",
-                            zIndex: 1,
-                        }}
-                    >
-                        <CircularProgress size={28} />
-                    </Box>
+                {!apiKey ? null : (
+                    <APIProvider apiKey={apiKey}>
+                        {loading && (
+                            <Box
+                                sx={{
+                                    position: "absolute",
+                                    inset: 0,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    bgcolor: "rgba(255,255,255,0.75)",
+                                    zIndex: 2
+                                }}
+                            >
+                                <CircularProgress size={28} />
+                            </Box>
+                        )}
+
+                        <Map
+                            defaultCenter={defaultCenter}
+                            defaultZoom={4}
+                            mapId={mapId}
+                            style={{ width: "100%", height: "100%" }}
+                            {...mapOptions}
+                            onIdle={() => setLoading(false)}
+                        >
+                            {/* Markers */}
+                            {destinations.map((d) => (
+                                <AdvancedMarker
+                                    key={d.name}
+                                    position={d.position}
+                                    onClick={() => setSelected(d)} // <-- open tooltip
+                                >
+                                    <Pin />
+                                </AdvancedMarker>
+                            ))}
+
+                            {/* Tooltip / Info Window */}
+                            {selected && (
+                                <InfoWindow
+                                    position={selected.position}
+                                    onCloseClick={() => setSelected(null)}
+                                >
+                                    <Box sx={{ minWidth: 160 }}>
+                                        <Typography sx={{ fontWeight: 700 }}>
+                                            {selected.name}
+                                        </Typography>
+
+                                        <Typography sx={{ fontSize: 13, color: "text.secondary", mb: 1 }}>
+                                            Featured destination
+                                        </Typography>
+
+                                        <a
+                                            href={`https://www.google.com/maps/search/?api=1&query=${selected.position.lat},${selected.position.lng}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            style={{
+                                                color: "#1a73e8",
+                                                textDecoration: "none",
+                                                fontSize: 13
+                                            }}
+                                        >
+                                            View on Google Maps
+                                        </a>
+                                    </Box>
+                                </InfoWindow>
+                            )}
+                        </Map>
+                    </APIProvider>
                 )}
-                <Box ref={mapRef} sx={{ width: "100%", height: "100%" }} />
             </Box>
         </Box>
-    );
+    )
 }
