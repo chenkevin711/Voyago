@@ -1,6 +1,7 @@
 import { Box, Button, Container, Paper, Typography } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 import Navbar from "../components/Navbar";
+import DestinationMap from "../components/DestinationMap";
 
 export default function Landing() {
   return (
@@ -65,6 +66,8 @@ export default function Landing() {
               </Paper>
             ))}
           </Box>
+
+          <DestinationMap />
         </Paper>
       </Container>
     </Box>

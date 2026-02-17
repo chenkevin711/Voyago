@@ -71,3 +71,13 @@ export default defineConfig([
     },
 ])
 ```
+
+## Environment Variables
+
+Create a `.env` file in `frontend/` and add your Google Maps key:
+
+```bash
+GOOGLE_API_KEY=your_google_maps_javascript_api_key
+```
+
+This key is used on the landing page demo map.
