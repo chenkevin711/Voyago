@@ -18,8 +18,8 @@ export default function Login() {
 
   // Return user to homepage if they are logged in.
   useEffect(() => {
-    if (cookies.loggedIn === "true") {
-      navigate("/");
+    if (cookies.loggedIn) {
+      setTimeout(() => navigate("/"), 0);
     }
   }, [cookies.loggedIn]);
 
