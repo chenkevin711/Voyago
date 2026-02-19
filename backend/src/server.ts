@@ -2,12 +2,14 @@ import express, { Request, Response } from 'express'
 import cors from 'cors'
 import { connectToDatabase, closeDatabaseConnection } from './config/database'
 import authRouter from './routes/auth'
+import cookieParser from "cookie-parser";
 
 const app = express()
 
 // Middleware
 app.use(cors())
 app.use(express.json())
+app.use(cookieParser());
 
 // Mount auth routes
 app.use('/api/auth', authRouter)
@@ -15,7 +17,6 @@ app.use('/api/auth', authRouter)
 // Load environment variables from the .env file
 const { loadEnvFile } = require('node:process');
 loadEnvFile();
-
 
 // Test route
 app.get('/api/health', (req: Request, res: Response) => {

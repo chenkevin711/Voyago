@@ -13,16 +13,12 @@ export default function Navbar() {
   const location = useLocation();
   const [cookies] = useCookies(["loggedIn", "username"]);
 
-  const isAuthPage =
-    location.pathname === "/login" ||
-    location.pathname === "/signup" ||
-    location.pathname === "/";
-  
   const handleLogout = async () => {
-    await axios<"">({
-      method: "post",
-      url: "/api/logout",
-    });
+    try {
+      await axios.post("/api/auth/logout");
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   const AuthButtons = () => (
@@ -72,10 +68,10 @@ export default function Navbar() {
   );
 
   function NavButtons() {
-    if(!cookies.loggedIn) {
-      return AuthButtons()
-    } else {
+    if(cookies.loggedIn) {
       return UserButtons()
+    } else {
+      return AuthButtons()
     }
   }
 

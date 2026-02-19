@@ -26,13 +26,6 @@ describe('Authentication Tests', () => {
                 username: 'foo',
                 password_hash: passwordHash,
                 role: 'user',
-                address: {
-                    street: "3141 Chestnut Street",
-                    city: "Philadelphia",
-                    state: "PA",
-                    country: "USA",
-                    postal_code: "19104"
-                }
             });
         }
     });

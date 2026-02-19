@@ -16,20 +16,13 @@ export interface User {
   password_hash: string;
   profile_picture_url?: string;
   role?: 'admin' | 'moderator' | 'user';
-  address?: {
-    street?: string;
-    city?: string;
-    state?: string;
-    country?: string;
-    postal_code?: string;
-  };
 }
 
 /**
  * Request body for login endpoint
  */
 export interface LoginRequest {
-  username: string;
+  email: string;
   password: string;
 }
 
@@ -41,6 +34,30 @@ export interface LoginResponse {
   message: string;
   user?: {
     id: string;
+    username: string;
+    role: string;
+  };
+  token?: string;
+}
+
+/**
+ * Request body for register endpoint
+ */
+export interface RegisterRequest {
+  email: string;
+  username: string;
+  password: string;
+}
+
+/**
+ * Response data for successful account creation
+ */
+export interface RegisterResponse {
+  success: boolean;
+  message: string;
+  user?: {
+    id: string;
+    email: string;
     username: string;
     role: string;
   };

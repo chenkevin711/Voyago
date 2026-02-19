@@ -6,9 +6,8 @@ import express, {
 } from "express";
 import argon2 from 'argon2';
 import crypto from "crypto";
-import cookieParser from "cookie-parser";
 import { getCollection } from '../config/database';
-import { User, LoginRequest, LoginResponse } from '../types';
+import { User, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse } from '../types';
 
 const router: Router = express.Router();
 let tokenStorage: { [key: string]: string } = {};
@@ -31,13 +30,13 @@ let privateCookieOptions = { ...publicCookieOptions, httpOnly: true };
  */
 router.post('/login', async (req: Request, res: Response) => {
   try {
-    const { username, password } = req.body as LoginRequest;
+    const { email, password } = req.body as LoginRequest;
 
     // Validate input
-    if (!username || !password) {
+    if (!email || !password) {
         res.status(400).json({
             success: false,
-            message: 'Username and password are required'
+            message: 'Email and password are required'
         });
         return;
     }
@@ -47,13 +46,13 @@ router.post('/login', async (req: Request, res: Response) => {
     
     // Find user by username
     const user = await usersCollection.findOne({ 
-        username: username.toLowerCase() 
+        email: email.toLowerCase() 
     });
 
     if (!user) {
         res.status(401).json({
             success: false,
-            message: 'Invalid username or password'
+            message: 'Invalid email or password'
         });
         return;
     }
@@ -67,16 +66,16 @@ router.post('/login', async (req: Request, res: Response) => {
     if (!isPasswordValid) {
         res.status(401).json({
             success: false,
-            message: 'Invalid username or password'
+            message: 'Invalid email or password'
         });
         return;
     }
 
     let token = getRandomToken();
-    tokenStorage[token] = username;
+    tokenStorage[token] = user.username;
     res.cookie("token", token, privateCookieOptions);
     res.cookie("loggedIn", "true", publicCookieOptions);
-    res.cookie("username", username, publicCookieOptions);
+    res.cookie("username", user.username, publicCookieOptions);
 
     res.status(200).json({
         success: true,
@@ -96,15 +95,75 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/logout', async(req: Request, res: Response<"">) => {
-    let { token } = req.cookies;
-    if (token && tokenStorage.hasOwnProperty(token)) {
-        delete tokenStorage[token];
+/*
+ * POST /api/auth/register
+ * 
+ * Validates request and creates account
+*/
+router.post('/register', async (req: Request, res: Response) => {
+    try {
+        const { username, email, password } = req.body as RegisterRequest;
+        // Validate input
+        if(!username || !email || !password) {
+            res.status(400).json({
+                success: false,
+                message: 'Please fill out all fields'
+            });
+            return;
+        }
+        // Get users collection
+        const usersCollection = getCollection<User>('users');
+        
+        // Find any existing user with email
+        const existingUser = await usersCollection.findOne({ email: email });
+        if(existingUser) {
+            res.status(400).json({
+                success: false,
+                message: 'Email already exist'
+            });
+            return;
+        }
+        // Hash password with Argon2
+        const hashed_password = await argon2.hash(password);
+        await usersCollection.insertOne({
+                email: email,
+                username: username,
+                password_hash: hashed_password,
+                role: 'user',
+        });
+        res.status(200).json({
+            success: true,
+            message: 'Account creation successful',
+        } as LoginResponse);
+    } catch(error) {
+        console.error('Register error:', error);
+        res.status(500).json({
+        success: false,
+        message: 'An error occurred during register'
+        } as RegisterResponse);
     }
-    res.clearCookie("token", privateCookieOptions);
-    res.clearCookie("loggedIn", publicCookieOptions);
-    res.clearCookie("username", publicCookieOptions);
-    return res.send();
+});
+
+/**
+ * POST /api/auth/logout
+ * 
+ * Logs out user by clearing cookie
+ */
+router.post('/logout', (req: Request, res: Response) => {
+  const token = req.cookies?.token;
+
+  if (token && tokenStorage[token]) {
+    delete tokenStorage[token];
+  }
+
+  res.clearCookie("token", privateCookieOptions);
+  res.clearCookie("loggedIn", publicCookieOptions);
+  res.clearCookie("username", publicCookieOptions);
+
+  res.status(200).json({
+    success: true,
+    message: "Logged out successfully",
+  });
 });
 
 export default router;
