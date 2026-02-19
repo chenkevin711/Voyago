@@ -1,4 +1,11 @@
-import { Button, Paper, Typography, Box } from "@mui/material";
+import {
+  Button,
+  Paper,
+  Typography,
+  Box,
+  Chip,
+  Stack,
+} from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 
 export default function TripCard({
@@ -8,26 +15,69 @@ export default function TripCard({
 }) {
   return (
     <Paper
+      component={RouterLink}
+      to={`/trips/${trip.id}`}
       elevation={0}
       sx={{
         p: 3,
         borderRadius: 4,
         border: "1px solid rgba(47,65,86,0.12)",
-        background: "rgba(255,255,255,0.65)"
+        background: "rgba(255,255,255,0.75)",
+        backdropFilter: "blur(6px)",
+        textDecoration: "none",
+        color: "inherit",
+        transition: "all 0.2s ease",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        minHeight: 170,
+
+        "&:hover": {
+          transform: "translateY(-4px)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+          borderColor: "primary.main",
+        },
       }}
     >
-      <Typography variant="h6" sx={{ mb: 0.5 }}>
-        {trip.name}
-      </Typography>
-      <Typography sx={{ color: "text.secondary", mb: 2 }}>
-        {trip.dates} • {trip.members} members
-      </Typography>
+      {/* Top Section */}
+      <Box>
+        <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
+          {trip.name}
+        </Typography>
 
-      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-        <Button component={RouterLink} to={`/trips/${trip.id}`} variant="contained" size="small">
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap">
+          <Chip
+            label={trip.dates}
+            size="small"
+            variant="outlined"
+          />
+          <Chip
+            label={`${trip.members} member${
+              trip.members === 1 ? "" : "s"
+            }`}
+            size="small"
+            variant="outlined"
+          />
+        </Stack>
+      </Box>
+
+      {/* Actions */}
+      <Box sx={{ display: "flex", gap: 1 }}>
+        <Button
+          variant="contained"
+          size="small"
+          onClick={(e) => e.stopPropagation()}
+        >
           Open
         </Button>
-        <Button component={RouterLink} to={`/trips/${trip.id}/itinerary`} variant="text" size="small">
+
+        <Button
+          component={RouterLink}
+          to={`/trips/${trip.id}/itinerary`}
+          variant="text"
+          size="small"
+          onClick={(e) => e.stopPropagation()}
+        >
           Itinerary →
         </Button>
       </Box>
