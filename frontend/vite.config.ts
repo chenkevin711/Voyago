@@ -6,6 +6,11 @@ export default defineConfig(({ mode }) => {
 
     return {
         plugins: [react()],
+        server: {
+            proxy: {
+            "/api": "http://localhost:5000",
+            },
+        },
         resolve: {
             dedupe: ["react", "react-dom"],
         },

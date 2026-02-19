@@ -1,5 +1,9 @@
 {
     "devDependencies": {
         "prettier": "^3.8.1"
+    },
+    "dependencies": {
+        "react-cookie": "^8.0.1",
+        "react-cookies": "^0.1.1"
     }
 }
