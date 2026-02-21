@@ -48,6 +48,24 @@ export default function TripOverview() {
                   Attractions: {trip.selectedAttractions.map((a) => a.name).join(", ")}
                 </Typography>
               )}
+
+              {trip.navigationPlans.length > 0 && (
+                <Stack spacing={0.75}>
+                  <Typography variant="body2" color="text.secondary">Navigation routes:</Typography>
+                  {trip.navigationPlans.map((plan) => (
+                    <Button
+                      key={`${plan.origin}-${plan.destination}`}
+                      href={plan.mapsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      size="small"
+                      sx={{ justifyContent: "flex-start", width: "fit-content", px: 0 }}
+                    >
+                      {plan.origin} → {plan.destination}
+                    </Button>
+                  ))}
+                </Stack>
+              )}
             </Stack>
           </Paper>
         )}

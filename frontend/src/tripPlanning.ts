@@ -26,6 +26,15 @@ export type AttractionOption = {
   source: "google_places" | "mock";
 };
 
+export type NavigationPlan = {
+  origin: string;
+  destination: string;
+  originPlaceId?: string;
+  destinationPlaceId?: string;
+  mapsUrl: string;
+  source: "google_places" | "mock";
+};
+
 export type PlannedTrip = {
   id: string;
   name: string;
@@ -36,6 +45,7 @@ export type PlannedTrip = {
   flights: FlightOption[];
   selectedFlight?: FlightOption;
   transportationNotes: string;
+  navigationPlans: NavigationPlan[];
   accommodations: StayOption[];
   selectedAccommodation?: StayOption;
   attractions: AttractionOption[];
@@ -58,7 +68,11 @@ export function getSavedTrips(): PlannedTrip[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed;
+
+    return parsed.map((trip) => ({
+      ...trip,
+      navigationPlans: trip.navigationPlans ?? [],
+    }));
   } catch {
     return [];
   }

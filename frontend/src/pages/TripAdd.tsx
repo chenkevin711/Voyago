@@ -20,6 +20,7 @@ import Page from "../components/Page";
 import {
   type AttractionOption,
   type FlightOption,
+  type NavigationPlan,
   type PlannedTrip,
   type StayOption,
   formatDateRange,
@@ -78,6 +79,9 @@ export default function TripAdd() {
   const [attractions, setAttractions] = useState<AttractionOption[]>([]);
   const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([]);
   const [attractionsLoading, setAttractionsLoading] = useState(false);
+
+  const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([]);
+  const [navigationLoading, setNavigationLoading] = useState(false);
 
   const nights = tripNights(startDate, endDate);
 
@@ -186,6 +190,102 @@ export default function TripAdd() {
     }
   }
 
+
+  async function buildNavigationPlans() {
+    if (destinations.length < 2) {
+      return;
+    }
+
+    setNavigationLoading(true);
+    try {
+      const apiKey = import.meta.env.VITE_GOOGLE_PLACES_API_KEY;
+      if (!apiKey) {
+        const mockPlans = destinations.slice(0, -1).map((origin, index) => {
+          const destination = destinations[index + 1];
+          return {
+            origin,
+            destination,
+            mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`,
+            source: "mock" as const,
+          };
+        });
+        setNavigationPlans(mockPlans);
+        return;
+      }
+
+      const pairs = destinations.slice(0, -1).map((origin, index) => ({
+        origin,
+        destination: destinations[index + 1],
+      }));
+
+      async function lookupPlaceId(query: string): Promise<string | undefined> {
+        const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": apiKey,
+            "X-Goog-FieldMask": "places.id",
+          },
+          body: JSON.stringify({
+            textQuery: query,
+            pageSize: 1,
+          }),
+        });
+
+        const data = (await response.json()) as { places?: Array<{ id?: string }> };
+        return data.places?.[0]?.id;
+      }
+
+      const resolvedPlans = await Promise.all(
+        pairs.map(async ({ origin, destination }) => {
+          const [originPlaceId, destinationPlaceId] = await Promise.all([
+            lookupPlaceId(origin),
+            lookupPlaceId(destination),
+          ]);
+
+          const url = new URL("https://www.google.com/maps/dir/");
+          url.searchParams.set("api", "1");
+          url.searchParams.set("origin", origin);
+          url.searchParams.set("destination", destination);
+          url.searchParams.set("travelmode", "driving");
+
+          if (originPlaceId) {
+            url.searchParams.set("origin_place_id", originPlaceId);
+          }
+
+          if (destinationPlaceId) {
+            url.searchParams.set("destination_place_id", destinationPlaceId);
+          }
+
+          return {
+            origin,
+            destination,
+            originPlaceId,
+            destinationPlaceId,
+            mapsUrl: url.toString(),
+            source: "google_places" as const,
+          };
+        })
+      );
+
+      setNavigationPlans(resolvedPlans);
+    } catch {
+      const fallbackPlans = destinations.slice(0, -1).map((origin, index) => {
+        const destination = destinations[index + 1];
+        return {
+          origin,
+          destination,
+          mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`,
+          source: "mock" as const,
+        };
+      });
+
+      setNavigationPlans(fallbackPlans);
+    } finally {
+      setNavigationLoading(false);
+    }
+  }
+
   async function fetchAttractions() {
     if (destinations.length === 0) {
       return;
@@ -271,6 +371,7 @@ export default function TripAdd() {
       flights,
       selectedFlight,
       transportationNotes,
+      navigationPlans,
       accommodations,
       selectedAccommodation,
       attractions,
@@ -373,6 +474,34 @@ export default function TripAdd() {
                   onChange={(e) => setTransportationNotes(e.target.value)}
                   placeholder="e.g. Prefer morning departures"
                 />
+
+                <Button
+                  variant="outlined"
+                  onClick={buildNavigationPlans}
+                  disabled={navigationLoading || destinations.length < 2}
+                >
+                  {navigationLoading ? "Building navigation..." : "Build navigation links (Google Places)"}
+                </Button>
+
+                {destinations.length < 2 && (
+                  <Alert severity="info">Add at least two destinations to create navigation routes.</Alert>
+                )}
+
+                {navigationPlans.length > 0 && (
+                  <Stack spacing={1}>
+                    {navigationPlans.map((plan) => (
+                      <Paper key={`${plan.origin}-${plan.destination}`} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                        <Typography sx={{ fontWeight: 700 }}>{plan.origin} → {plan.destination}</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          Source: {plan.source === "google_places" ? "Google Places" : "Mock fallback"}
+                        </Typography>
+                        <Button href={plan.mapsUrl} target="_blank" rel="noreferrer" size="small" variant="text">
+                          Open navigation in Google Maps
+                        </Button>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
 
                 {transportMode === "flight" && (
                   <>
