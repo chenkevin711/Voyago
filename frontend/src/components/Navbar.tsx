@@ -5,19 +5,21 @@ import {
   Box,
   Button
 } from "@mui/material";
-import { Link as RouterLink, useLocation } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 import axios from "axios";
 import { useCookies } from "react-cookie";
 
 export default function Navbar() {
-  const location = useLocation();
-  const [cookies] = useCookies(["loggedIn", "username"]);
+  const [cookies, , removeCookie] = useCookies(["loggedIn"]);
 
   const handleLogout = async () => {
     try {
       await axios.post("/api/auth/logout");
     } catch (error) {
       console.error(error);
+    } finally {
+      removeCookie("loggedIn", { path: "/" });
+      window.location.href = "/";
     }
   };
 
@@ -69,10 +71,10 @@ export default function Navbar() {
 
   function NavButtons() {
     if(cookies.loggedIn) {
-      return UserButtons()
-    } else {
-      return AuthButtons()
+      return UserButtons();
     }
+
+    return AuthButtons();
   }
 
   return (
@@ -94,7 +96,6 @@ export default function Navbar() {
           margin: "0 auto"
         }}
       >
-        {/* Logo */}
         <Typography
           component={RouterLink}
           to="/"
@@ -109,7 +110,6 @@ export default function Navbar() {
           Voyago
         </Typography>
 
-        {/* Right Side Buttons */}
         <Box sx={{ display: "flex", gap: 1 }}>
           <NavButtons />
         </Box>

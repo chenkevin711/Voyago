@@ -13,8 +13,9 @@ import { Link as RouterLink } from "react-router-dom";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
 import TripCard from "./TripCard";
+import { formatDateRange, getSavedTrips, type PlannedTrip } from "../tripPlanning";
 
-const trips = [
+const sampleTrips = [
   { id: "paris2026", name: "Paris + London", dates: "Mar 12–20", members: 4 },
   { id: "tokyo", name: "Tokyo Food Trip", dates: "Apr 3–9", members: 2 },
   { id: "miami", name: "Miami Relax Week", dates: "May 1–6", members: 3 },
@@ -22,9 +23,28 @@ const trips = [
 
 type SortKey = "name" | "members";
 
+type DashboardTrip = {
+  id: string;
+  name: string;
+  dates: string;
+  members: number;
+};
+
+function toDashboardTrip(trip: PlannedTrip): DashboardTrip {
+  return {
+    id: trip.id,
+    name: trip.name,
+    dates: formatDateRange(trip.startDate, trip.endDate),
+    members: trip.members,
+  };
+}
+
 export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortKey>("name");
+  const [storedTrips] = useState<DashboardTrip[]>(() => getSavedTrips().map(toDashboardTrip));
+
+  const trips = useMemo(() => [...storedTrips, ...sampleTrips], [storedTrips]);
 
   const filteredTrips = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -37,7 +57,7 @@ export default function Dashboard() {
       if (sortBy === "members") return b.members - a.members;
       return a.name.localeCompare(b.name);
     });
-  }, [query, sortBy]);
+  }, [query, sortBy, trips]);
 
   return (
     <AppLayout>
@@ -51,7 +71,6 @@ export default function Dashboard() {
         }
       >
         <Container maxWidth="lg" disableGutters>
-          {/* Controls */}
           <Stack
             direction={{ xs: "column", sm: "row" }}
             spacing={2}
@@ -96,7 +115,6 @@ export default function Dashboard() {
             </Stack>
           </Stack>
 
-          {/* Empty State */}
           {filteredTrips.length === 0 ? (
             <Box
               sx={{

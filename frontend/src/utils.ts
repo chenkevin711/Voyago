@@ -12,7 +12,7 @@ function ensureError(value: unknown): Error {
     stringified = "[Unable to stringify the thrown value]";
   }
 
-  let error = new Error(
+  const error = new Error(
     `Thrown value was originally not an error; stringified value is: ${stringified}`,
   );
   return error;
@@ -21,7 +21,7 @@ function ensureError(value: unknown): Error {
 // https://axios-http.com/docs/handling_errors
 // https://github.com/axios/axios/issues/3612
 function getAxiosErrorMessages(err: unknown): string[] {
-  let error = ensureError(err);
+  const error = ensureError(err);
   console.log(error);
   if (!axios.isAxiosError(error)) {
     return [error.toString()];

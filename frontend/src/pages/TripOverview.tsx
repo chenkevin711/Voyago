@@ -1,14 +1,57 @@
-import { Box, Button } from "@mui/material";
+import { Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
 import { Link as RouterLink, useParams } from "react-router-dom";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
+import { formatDateRange, getPlannedTripById } from "../tripPlanning";
+
+function toCurrency(amount: number): string {
+  return `$${amount.toLocaleString()}`;
+}
 
 export default function TripOverview() {
   const { tripId } = useParams();
+  const trip = tripId ? getPlannedTripById(tripId) : undefined;
 
   return (
     <AppLayout>
-      <Page title="Trip Overview" subtitle={`Trip: ${tripId}`}>
+      <Page
+        title={trip?.name ?? "Trip Overview"}
+        subtitle={trip ? `${formatDateRange(trip.startDate, trip.endDate)} • Budget ${toCurrency(trip.budget)}` : `Trip: ${tripId}`}
+      >
+        {trip && (
+          <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" gap={1} flexWrap="wrap">
+                {trip.destinations.map((destination) => (
+                  <Chip key={destination} label={destination} variant="outlined" />
+                ))}
+              </Stack>
+
+              <Typography variant="body2" color="text.secondary">
+                Estimated spend: {toCurrency(trip.estimatedTotal)}
+              </Typography>
+
+              {trip.selectedFlight && (
+                <Typography variant="body2" color="text.secondary">
+                  Flight: {trip.selectedFlight.airline} ({toCurrency(trip.selectedFlight.price)})
+                </Typography>
+              )}
+
+              {trip.selectedAccommodation && (
+                <Typography variant="body2" color="text.secondary">
+                  Stay: {trip.selectedAccommodation.name} ({toCurrency(trip.selectedAccommodation.nightlyRate)}/night)
+                </Typography>
+              )}
+
+              {trip.selectedAttractions.length > 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  Attractions: {trip.selectedAttractions.map((a) => a.name).join(", ")}
+                </Typography>
+              )}
+            </Stack>
+          </Paper>
+        )}
+
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
           <Button component={RouterLink} to={`/trips/${tripId}/itinerary`} variant="contained">
             Itinerary
