@@ -13,7 +13,7 @@ import { Link as RouterLink } from "react-router-dom";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
 import TripCard from "./TripCard";
-import { formatDateRange, getSavedTrips, type PlannedTrip } from "../tripPlanning";
+import { deletePlannedTrip, formatDateRange, getSavedTrips, type PlannedTrip } from "../tripPlanning";
 
 const sampleTrips = [
     { id: "paris2026", name: "Paris + London", dates: "Mar 12–20", members: 4 },
@@ -28,6 +28,7 @@ type DashboardTrip = {
     name: string;
     dates: string;
     members: number;
+    isSavedTrip?: boolean;
 };
 
 function toDashboardTrip(trip: PlannedTrip): DashboardTrip {
@@ -36,13 +37,14 @@ function toDashboardTrip(trip: PlannedTrip): DashboardTrip {
         name: trip.name,
         dates: formatDateRange(trip.startDate, trip.endDate),
         members: trip.members,
+        isSavedTrip: true,
     };
 }
 
 export default function Dashboard() {
     const [query, setQuery] = useState("");
     const [sortBy, setSortBy] = useState<SortKey>("name");
-    const [storedTrips] = useState<DashboardTrip[]>(() => getSavedTrips().map(toDashboardTrip));
+    const [storedTrips, setStoredTrips] = useState<DashboardTrip[]>(() => getSavedTrips().map(toDashboardTrip));
 
     const trips = useMemo(() => [...storedTrips, ...sampleTrips], [storedTrips]);
 
@@ -58,6 +60,11 @@ export default function Dashboard() {
             return a.name.localeCompare(b.name);
         });
     }, [query, sortBy, trips]);
+
+    function removeTrip(id: string) {
+        deletePlannedTrip(id);
+        setStoredTrips((prev) => prev.filter((trip) => trip.id !== id));
+    }
 
     return (
         <AppLayout>
@@ -149,7 +156,7 @@ export default function Dashboard() {
                             }}
                         >
                             {filteredTrips.map((t) => (
-                                <TripCard key={t.id} trip={t} />
+                                <TripCard key={t.id} trip={t} onDelete={removeTrip} />
                             ))}
                         </Box>
                     )}

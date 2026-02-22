@@ -91,6 +91,25 @@ export function getPlannedTripById(id: string): PlannedTrip | undefined {
     return getSavedTrips().find((trip) => trip.id === id);
 }
 
+export function updatePlannedTrip(id: string, updater: (trip: PlannedTrip) => PlannedTrip): PlannedTrip | undefined {
+    const current = getSavedTrips();
+    const existing = current.find((trip) => trip.id === id);
+    if (!existing) {
+        return undefined;
+    }
+
+    const updated = updater(existing);
+    const next = current.map((trip) => (trip.id === id ? updated : trip));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    return updated;
+}
+
+export function deletePlannedTrip(id: string): void {
+    const current = getSavedTrips();
+    const next = current.filter((trip) => trip.id !== id);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+}
+
 export function formatDateRange(startDate: string, endDate: string): string {
     if (!startDate || !endDate) {
         return "Dates TBD";
