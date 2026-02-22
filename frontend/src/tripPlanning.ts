@@ -29,6 +29,9 @@ export type AttractionOption = {
 export type NavigationPlan = {
     origin: string;
     destination: string;
+    method?: "driving" | "transit" | "walking";
+    estimatedCost?: number;
+    estimatedDuration?: string;
     originPlaceId?: string;
     destinationPlaceId?: string;
     mapsUrl: string;
