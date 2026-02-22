@@ -1,289 +1,190 @@
 import { useMemo, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Chip,
-  Divider,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  MenuItem,
   Paper,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
+import { Link as RouterLink, useParams } from "react-router-dom";
+import {
+  APIProvider,
+  AdvancedMarker,
+  InfoWindow,
+  Map,
+  Pin,
+} from "@vis.gl/react-google-maps";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
+import { formatDateRange, getPlannedTripById, tripNights, updatePlannedTrip } from "../tripPlanning";
 
-type SectionKey = "morning" | "afternoon" | "evening";
-
-type DayPlan = {
-  day: string;
-  title: string;
-  morning: string[];
-  afternoon: string[];
-  evening: string[];
+type MarkerPoint = {
+  id: string;
+  label: string;
+  kind: "destination" | "attraction";
+  position: { lat: number; lng: number };
 };
 
-const initialDays: DayPlan[] = [
-  {
-    day: "Day 1",
-    title: "Arrive + Explore",
-    morning: ["Check-in"],
-    afternoon: ["Lunch spot"],
-    evening: ["Evening walk"],
-  },
-  {
-    day: "Day 2",
-    title: "Museums + Food",
-    morning: ["Morning museum"],
-    afternoon: ["Market lunch"],
-    evening: ["Dinner reservation"],
-  },
-];
+const fallbackCenter = { lat: 46.5, lng: 8.4 };
 
-function sectionLabel(key: SectionKey) {
-  if (key === "morning") return "Morning";
-  if (key === "afternoon") return "Afternoon";
-  return "Evening";
-}
-
-function ActivityItem({ text }: { text: string }) {
-  return (
-    <Paper
-      elevation={0}
-      sx={{
-        p: 1.25,
-        borderRadius: 2,
-        border: "1px solid rgba(47,65,86,0.12)",
-        bgcolor: "rgba(255,255,255,0.7)",
-      }}
-    >
-      <Typography variant="body2">{text}</Typography>
-    </Paper>
-  );
-}
-
-function Section({
-  label,
-  items,
-  onAddClick,
-}: {
-  label: "Morning" | "Afternoon" | "Evening";
-  items: string[];
-  onAddClick: () => void;
-}) {
-  return (
-    <Box sx={{ flex: 1, minWidth: 240 }}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ mb: 1 }}
-      >
-        <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-          {label}
-        </Typography>
-        <Button
-          variant="text"
-          size="small"
-          sx={{ minWidth: "auto", px: 1 }}
-          onClick={onAddClick}
-        >
-          + Add
-        </Button>
-      </Stack>
-
-      {items.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          No plans yet.
-        </Typography>
-      ) : (
-        <Stack spacing={1}>
-          {items.map((i) => (
-            <ActivityItem key={i} text={i} />
-          ))}
-        </Stack>
-      )}
-    </Box>
-  );
+function hashToPoint(text: string): { lat: number; lng: number } {
+  const hash = Array.from(text).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return {
+    lat: 30 + (hash % 50),
+    lng: -20 + (hash % 120),
+  };
 }
 
 export default function Itinerary() {
-  const [dayPlans, setDayPlans] = useState<DayPlan[]>(initialDays);
+  const { tripId } = useParams();
+  const [refresh, setRefresh] = useState(0);
+  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
+  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
+  const [selectedMarker, setSelectedMarker] = useState<MarkerPoint | null>(null);
 
-  // Dialog state
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [activeDay, setActiveDay] = useState<string>(initialDays[0]?.day ?? "Day 1");
-  const [activeSection, setActiveSection] = useState<SectionKey>("morning");
-  const [activityName, setActivityName] = useState("");
+  const trip = useMemo(() => (tripId ? getPlannedTripById(tripId) : undefined), [tripId, refresh]);
 
-  const dayOptions = useMemo(() => dayPlans.map((d) => d.day), [dayPlans]);
+  const itineraryDays = useMemo(() => {
+    if (!trip) return [] as Array<{ label: string; items: string[] }>;
 
-  function openAddDialog(day: string, section: SectionKey) {
-    setActiveDay(day);
-    setActiveSection(section);
-    setActivityName("");
-    setDialogOpen(true);
-  }
+    const start = new Date(trip.startDate);
+    const end = new Date(trip.endDate);
+    const days = Math.max(1, Math.ceil((end.valueOf() - start.valueOf()) / 86400000));
 
-  function closeDialog() {
-    setDialogOpen(false);
-  }
+    const base = Array.from({ length: days }, (_, index) => ({
+      label: `Day ${index + 1}`,
+      items: [] as string[],
+    }));
 
-  function addActivity() {
-    const name = activityName.trim();
-    if (!name) return;
+    trip.selectedAttractions.forEach((attraction, index) => {
+      base[index % base.length].items.push(attraction.name);
+    });
 
-    setDayPlans((prev) =>
-      prev.map((d) => {
-        if (d.day !== activeDay) return d;
+    return base;
+  }, [trip]);
 
-        return {
-          ...d,
-          [activeSection]: [...d[activeSection], name],
-        };
-      })
-    );
+  const mapPoints = useMemo(() => {
+    if (!trip) return [] as MarkerPoint[];
 
-    setActivityName("");
-    setDialogOpen(false);
+    const destinationPoints = trip.destinations.map((destination) => ({
+      id: `dest-${destination}`,
+      label: destination,
+      kind: "destination" as const,
+      position: hashToPoint(destination),
+    }));
+
+    const attractionPoints = trip.selectedAttractions.map((attraction) => ({
+      id: `att-${attraction.name}`,
+      label: attraction.name,
+      kind: "attraction" as const,
+      position: hashToPoint(attraction.location || attraction.name),
+    }));
+
+    return [...destinationPoints, ...attractionPoints];
+  }, [trip]);
+
+  const center = mapPoints[0]?.position ?? fallbackCenter;
+
+  function deleteAttraction(name: string) {
+    if (!tripId) return;
+
+    updatePlannedTrip(tripId, (current) => ({
+      ...current,
+      selectedAttractions: current.selectedAttractions.filter((a) => a.name !== name),
+      estimatedTotal:
+        (current.selectedFlight?.price ?? 0) +
+        (current.selectedAccommodation
+          ? current.selectedAccommodation.nightlyRate * tripNights(current.startDate, current.endDate)
+          : 0) +
+        current.selectedAttractions.filter((a) => a.name !== name).reduce((sum, a) => sum + a.price, 0),
+    }));
+
+    setRefresh((v) => v + 1);
   }
 
   return (
     <AppLayout>
       <Page
-        title="Itinerary"
-        subtitle="Organize your trip by day and time — share updates with your group."
+        title={trip?.name ? `${trip.name} Itinerary` : "Itinerary"}
+        subtitle={trip ? `${formatDateRange(trip.startDate, trip.endDate)} • ${trip.destinations.join(" → ")}` : "Trip not found"}
       >
-        <Box sx={{ display: "grid", gap: 2 }}>
-          {dayPlans.map((d) => (
-            <Paper
-              key={d.day}
-              elevation={0}
-              sx={{
-                p: 2.5,
-                borderRadius: 4,
-                border: "1px solid rgba(47,65,86,0.12)",
-                background: "rgba(255,255,255,0.75)",
-                backdropFilter: "blur(6px)",
-              }}
-            >
-              {/* Header */}
-              <Stack
-                direction={{ xs: "column", sm: "row" }}
-                spacing={1}
-                alignItems={{ xs: "flex-start", sm: "center" }}
-                justifyContent="space-between"
-                sx={{ mb: 2 }}
-              >
-                <Box>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                    <Chip label={d.day} size="small" variant="outlined" />
-                    <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                      {d.title}
-                    </Typography>
-                  </Stack>
-                  <Typography variant="body2" color="text.secondary">
-                    Plan activities and keep everyone aligned.
-                  </Typography>
-                </Box>
+        {!trip ? (
+          <Alert severity="warning">Trip not found. Return to dashboard and open a saved trip.</Alert>
+        ) : (
+          <Stack spacing={2}>
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
+              <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Trip Map</Typography>
+              {!mapsApiKey ? (
+                <Alert severity="info">Add VITE_GOOGLE_API_KEY to display an interactive map with trip pins.</Alert>
+              ) : (
+                <APIProvider apiKey={mapsApiKey}>
+                  <Box sx={{ height: { xs: 320, md: 420 }, borderRadius: 2, overflow: "hidden" }}>
+                    <Map
+                      defaultCenter={center}
+                      defaultZoom={4}
+                      mapId={mapId}
+                      style={{ width: "100%", height: "100%" }}
+                      mapTypeControl={false}
+                      streetViewControl={false}
+                      fullscreenControl={false}
+                    >
+                      {mapPoints.map((point) => (
+                        <AdvancedMarker key={point.id} position={point.position} onClick={() => setSelectedMarker(point)}>
+                          <Pin
+                            background={point.kind === "destination" ? "#3367d6" : "#16a34a"}
+                            borderColor={point.kind === "destination" ? "#2b4db5" : "#15803d"}
+                            glyphColor="#ffffff"
+                          />
+                        </AdvancedMarker>
+                      ))}
 
-                <Stack direction="row" spacing={1}>
-                  <Button variant="outlined" size="small">
-                    View Map
-                  </Button>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={() => openAddDialog(d.day, "morning")}
-                  >
-                    Add Activity
-                  </Button>
-                </Stack>
-              </Stack>
-
-              <Divider sx={{ mb: 2 }} />
-
-              {/* Sections */}
-              <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                <Section
-                  label="Morning"
-                  items={d.morning}
-                  onAddClick={() => openAddDialog(d.day, "morning")}
-                />
-                <Section
-                  label="Afternoon"
-                  items={d.afternoon}
-                  onAddClick={() => openAddDialog(d.day, "afternoon")}
-                />
-                <Section
-                  label="Evening"
-                  items={d.evening}
-                  onAddClick={() => openAddDialog(d.day, "evening")}
-                />
-              </Box>
+                      {selectedMarker && (
+                        <InfoWindow position={selectedMarker.position} onCloseClick={() => setSelectedMarker(null)}>
+                          <Box>
+                            <Typography sx={{ fontWeight: 700 }}>{selectedMarker.label}</Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {selectedMarker.kind === "destination" ? "Destination" : "Selected attraction"}
+                            </Typography>
+                          </Box>
+                        </InfoWindow>
+                      )}
+                    </Map>
+                  </Box>
+                </APIProvider>
+              )}
             </Paper>
-          ))}
-        </Box>
 
-        {/* Add Activity Dialog */}
-        <Dialog open={dialogOpen} onClose={closeDialog} fullWidth maxWidth="sm">
-          <DialogTitle>Add Activity</DialogTitle>
-          <DialogContent>
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              <TextField
-                select
-                label="Day"
-                value={activeDay}
-                onChange={(e) => setActiveDay(e.target.value)}
-                fullWidth
-              >
-                {dayOptions.map((day) => (
-                  <MenuItem key={day} value={day}>
-                    {day}
-                  </MenuItem>
-                ))}
-              </TextField>
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
+              <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Selected Attractions</Typography>
+              {trip.selectedAttractions.length === 0 ? (
+                <Typography color="text.secondary">No attractions selected yet.</Typography>
+              ) : (
+                <Stack direction="row" gap={1} flexWrap="wrap">
+                  {trip.selectedAttractions.map((attraction) => (
+                    <Chip key={attraction.name} label={attraction.name} onDelete={() => deleteAttraction(attraction.name)} />
+                  ))}
+                </Stack>
+              )}
+            </Paper>
 
-              <TextField
-                select
-                label="Time of day"
-                value={activeSection}
-                onChange={(e) => setActiveSection(e.target.value as SectionKey)}
-                fullWidth
-              >
-                <MenuItem value="morning">{sectionLabel("morning")}</MenuItem>
-                <MenuItem value="afternoon">{sectionLabel("afternoon")}</MenuItem>
-                <MenuItem value="evening">{sectionLabel("evening")}</MenuItem>
-              </TextField>
+            <Box sx={{ display: "grid", gap: 1.5 }}>
+              {itineraryDays.map((day) => (
+                <Paper key={day.label} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                  <Typography sx={{ fontWeight: 700 }}>{day.label}</Typography>
+                  <Typography color="text.secondary" variant="body2">
+                    {day.items.length > 0 ? day.items.join(", ") : "No activities assigned yet."}
+                  </Typography>
+                </Paper>
+              ))}
+            </Box>
 
-              <TextField
-                label="Activity"
-                placeholder="e.g., Louvre museum"
-                value={activityName}
-                onChange={(e) => setActivityName(e.target.value)}
-                fullWidth
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") addActivity();
-                }}
-              />
-
-              <Typography variant="body2" color="text.secondary">
-                This is local UI state for now (demo-friendly). Next step would be saving to backend + syncing with WebSockets.
-              </Typography>
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={closeDialog}>Cancel</Button>
-            <Button variant="contained" onClick={addActivity} disabled={!activityName.trim()}>
-              Add
+            <Button component={RouterLink} to={`/trips/${trip.id}`} variant="outlined" sx={{ width: "fit-content" }}>
+              Back to overview
             </Button>
-          </DialogActions>
-        </Dialog>
+          </Stack>
+        )}
       </Page>
     </AppLayout>
   );

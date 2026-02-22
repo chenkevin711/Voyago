@@ -8,15 +8,14 @@ import {
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 
-export default function TripCard({
-  trip,
-}: {
-  trip: { id: string; name: string; dates: string; members: number };
-}) {
+type TripCardProps = {
+  trip: { id: string; name: string; dates: string; members: number; isSavedTrip?: boolean };
+  onDelete?: (id: string) => void;
+};
+
+export default function TripCard({ trip, onDelete }: TripCardProps) {
   return (
     <Paper
-      component={RouterLink}
-      to={`/trips/${trip.id}`}
       elevation={0}
       sx={{
         p: 3,
@@ -24,8 +23,6 @@ export default function TripCard({
         border: "1px solid rgba(47,65,86,0.12)",
         background: "rgba(255,255,255,0.75)",
         backdropFilter: "blur(6px)",
-        textDecoration: "none",
-        color: "inherit",
         transition: "all 0.2s ease",
         display: "flex",
         flexDirection: "column",
@@ -64,9 +61,10 @@ export default function TripCard({
       {/* Actions */}
       <Box sx={{ display: "flex", gap: 1 }}>
         <Button
+          component={RouterLink}
+          to={`/trips/${trip.id}`}
           variant="contained"
           size="small"
-          onClick={(e) => e.stopPropagation()}
         >
           Open
         </Button>
@@ -76,10 +74,20 @@ export default function TripCard({
           to={`/trips/${trip.id}/itinerary`}
           variant="text"
           size="small"
-          onClick={(e) => e.stopPropagation()}
         >
           Itinerary →
         </Button>
+
+        {trip.isSavedTrip && onDelete && (
+          <Button
+            color="error"
+            variant="text"
+            size="small"
+            onClick={() => onDelete(trip.id)}
+          >
+            Delete
+          </Button>
+        )}
       </Box>
     </Paper>
   );

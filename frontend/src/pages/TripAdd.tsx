@@ -31,11 +31,11 @@ import {
 import {
     APIProvider,
     AdvancedMarker,
+    InfoWindow,
     Map,
     Pin,
     useMap
 } from "@vis.gl/react-google-maps"
-import polyline from "polyline"
 
 const stepTitles = [
     "Name + Dates",
@@ -125,6 +125,44 @@ function modeLabel(mode: "driving" | "transit" | "walking"): string {
     if (mode === "transit") return "Transit"
     if (mode === "walking") return "Walking"
     return "Driving"
+}
+
+function decodePolyline(encoded: string): Array<[number, number]> {
+    let index = 0
+    const coordinates: Array<[number, number]> = []
+    let lat = 0
+    let lng = 0
+
+    while (index < encoded.length) {
+        let shift = 0
+        let result = 0
+        let byte: number
+
+        do {
+            byte = encoded.charCodeAt(index++) - 63
+            result |= (byte & 0x1f) << shift
+            shift += 5
+        } while (byte >= 0x20)
+
+        const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1)
+        lat += deltaLat
+
+        shift = 0
+        result = 0
+
+        do {
+            byte = encoded.charCodeAt(index++) - 63
+            result |= (byte & 0x1f) << shift
+            shift += 5
+        } while (byte >= 0x20)
+
+        const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1)
+        lng += deltaLng
+
+        coordinates.push([lat / 1e5, lng / 1e5])
+    }
+
+    return coordinates
 }
 
 /**
@@ -320,7 +358,7 @@ function RouteOverlay(props: {
             const route = leg.routes[choice]
             if (!route) return
 
-            const decoded = polyline.decode(route.encodedPolyline)
+            const decoded = decodePolyline(route.encodedPolyline)
             const path = decoded.map(([lat, lng]) => ({ lat, lng }))
 
             const line = new window.google.maps.Polyline({
@@ -351,6 +389,7 @@ function TripRouteMap(props: {
     selectedRouteByLeg: Record<number, number>
     mapId?: string
 }) {
+    const [selectedPlace, setSelectedPlace] = useState<ResolvedPlace | null>(null)
     const center = useMemo(() => {
         if (props.places.length > 0) return props.places[0].location
         return { lat: 46.5, lng: 8.4 }
@@ -393,10 +432,28 @@ function TripRouteMap(props: {
                 fullscreenControl={false}
             >
                 {props.places.map((p) => (
-                    <AdvancedMarker key={p.placeId ?? p.name} position={p.location} title={p.name}>
+                    <AdvancedMarker
+                        key={p.placeId ?? p.name}
+                        position={p.location}
+                        title={p.name}
+                        onClick={() => setSelectedPlace(p)}
+                    >
                         <Pin />
                     </AdvancedMarker>
                 ))}
+
+                {selectedPlace && (
+                    <InfoWindow position={selectedPlace.location} onCloseClick={() => setSelectedPlace(null)}>
+                        <Box>
+                            <Typography sx={{ fontWeight: 700 }}>{selectedPlace.name}</Typography>
+                            {selectedPlace.formattedAddress && (
+                                <Typography variant="body2" color="text.secondary">
+                                    {selectedPlace.formattedAddress}
+                                </Typography>
+                            )}
+                        </Box>
+                    </InfoWindow>
+                )}
 
                 <RouteOverlay legs={props.legs} selectedRouteByLeg={props.selectedRouteByLeg} />
             </Map>
