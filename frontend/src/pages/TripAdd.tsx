@@ -67,6 +67,17 @@ type RouteAlt = {
     encodedPolyline: string
 }
 
+type RouteOption = {
+    mode: "driving" | "transit" | "walking"
+    label: string
+    duration: string
+    distanceMeters: number
+    estimatedCost: number
+    mapsUrl: string
+    source: "google_routes" | "mock"
+    encodedPolyline?: string
+}
+
 type LegRoutes = {
     origin: string
     destination: string
@@ -86,6 +97,34 @@ function slugify(value: string): string {
 
 function metersToMiles(meters: number): number {
     return meters / 1609.344
+}
+
+function parseDurationSeconds(duration: string): number {
+    const clean = duration.replace(/s$/, "")
+    const h = /([0-9]+)h/.exec(clean)
+    const m = /([0-9]+)m/.exec(clean)
+    const s = /([0-9]+)$/.exec(clean)
+    return (h ? Number(h[1]) * 3600 : 0) + (m ? Number(m[1]) * 60 : 0) + (s ? Number(s[1]) : 0)
+}
+
+function estimateCost(params: { mode: "driving" | "transit" | "walking"; distanceMeters: number; duration: string }): number {
+    if (params.mode === "walking") return 0
+    const miles = metersToMiles(params.distanceMeters)
+    if (params.mode === "driving") return Math.max(4, Number((miles * 0.58).toFixed(2)))
+    const minutes = parseDurationSeconds(params.duration) / 60
+    return Math.max(3, Number((2.5 + minutes * 0.2).toFixed(2)))
+}
+
+function modeToTravelMode(mode: "driving" | "transit" | "walking"): "DRIVE" | "TRANSIT" | "WALK" {
+    if (mode === "transit") return "TRANSIT"
+    if (mode === "walking") return "WALK"
+    return "DRIVE"
+}
+
+function modeLabel(mode: "driving" | "transit" | "walking"): string {
+    if (mode === "transit") return "Transit"
+    if (mode === "walking") return "Walking"
+    return "Driving"
 }
 
 /**
@@ -143,7 +182,7 @@ async function computeLegRoutes(params: {
     apiKey: string
     origin: { lat: number; lng: number }
     destination: { lat: number; lng: number }
-    travelMode: "DRIVE" | "TRANSIT"
+    travelMode: "DRIVE" | "TRANSIT" | "WALK"
     alternatives: number
 }): Promise<RouteAlt[]> {
     const res = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
@@ -266,7 +305,7 @@ function RouteOverlay(props: {
     selectedRouteByLeg: Record<number, number>
 }) {
     const map = useMap()
-    const polylinesRef = useRef<any[]>([])
+    const polylinesRef = useRef<Array<{ setMap: (map: object | null) => void }>>([])
 
     useEffect(() => {
         if (!map) return
@@ -396,12 +435,14 @@ export default function TripAdd() {
     // Kept for your existing UI, but we now also show route options on the map
     const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
     const [navigationLoading, setNavigationLoading] = useState(false)
+    const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
 
     // New: resolved places + route alternatives for the map
     const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
     const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
     const [routesLoading, setRoutesLoading] = useState(false)
     const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
+    const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
     const nights = tripNights(startDate, endDate)
     const budget = Number(budgetInput)
@@ -421,6 +462,45 @@ export default function TripAdd() {
         if (activeStep === 2) return destinations.length > 0
         return true
     }, [activeStep, budget, budgetInput, destinations.length, endDate, startDate, tripName])
+
+    useEffect(() => {
+        if (!mapsApiKey || destinations.length === 0) {
+            setResolvedPlaces([])
+            return
+        }
+
+        let cancelled = false
+            ; (async () => {
+                const results = await Promise.all(destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d })))
+                if (cancelled) return
+                setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])))
+            })()
+
+        return () => {
+            cancelled = true
+        }
+    }, [destinations, mapsApiKey])
+
+    useEffect(() => {
+        if (Object.keys(routeOptionsByLeg).length === 0) return
+
+        const plans: NavigationPlan[] = Object.entries(routeOptionsByLeg).flatMap(([legIdx, options]) => {
+            const leg = routesByLeg[Number(legIdx)]
+            const selectedOption = options[selectedRouteByLeg[Number(legIdx)] ?? 0]
+            if (!leg || !selectedOption) return []
+            return [{
+                origin: leg.origin,
+                destination: leg.destination,
+                method: selectedOption.mode,
+                estimatedCost: selectedOption.estimatedCost,
+                estimatedDuration: selectedOption.duration,
+                mapsUrl: selectedOption.mapsUrl,
+                source: selectedOption.source === "google_routes" ? "google_places" : "mock"
+            }]
+        })
+
+        setNavigationPlans(plans)
+    }, [routeOptionsByLeg, routesByLeg, selectedRouteByLeg])
 
     function addDestination() {
         const value = destinationInput.trim()
@@ -482,7 +562,6 @@ export default function TripAdd() {
 
         setRoutesLoading(true)
         try {
-            // 1) Resolve all destinations to Places + lat/lng
             const placeResults = await Promise.all(
                 destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d }))
             )
@@ -493,126 +572,148 @@ export default function TripAdd() {
             if (places.length < 2) {
                 setRoutesByLeg([])
                 setSelectedRouteByLeg({})
+                setRouteOptionsByLeg({})
                 return
             }
 
-            // 2) Compute route alternatives for each leg A->B, B->C, ...
-            const travelMode = transportMode === "train" ? "TRANSIT" : "DRIVE"
+            const drivingTransitMode = transportMode === "train" ? "transit" : "driving"
 
-            const legs: LegRoutes[] = await Promise.all(
+            const legsWithOptions = await Promise.all(
                 places.slice(0, -1).map(async (origin, idx) => {
                     const destination = places[idx + 1]
-                    const routes = await computeLegRoutes({
-                        apiKey: mapsApiKey,
-                        origin: origin.location,
-                        destination: destination.location,
-                        travelMode,
-                        alternatives: 2
-                    })
+                    const baseUrl = new URL("https://www.google.com/maps/dir/")
+                    baseUrl.searchParams.set("api", "1")
+                    baseUrl.searchParams.set("origin", origin.name)
+                    baseUrl.searchParams.set("destination", destination.name)
+                    if (origin.placeId) baseUrl.searchParams.set("origin_place_id", origin.placeId)
+                    if (destination.placeId) baseUrl.searchParams.set("destination_place_id", destination.placeId)
+
+                    const modeOrder: Array<"driving" | "transit" | "walking"> = [drivingTransitMode, "walking", drivingTransitMode === "driving" ? "transit" : "driving"]
+                    const options: RouteOption[] = []
+
+                    for (const mode of modeOrder) {
+                        const result = await computeLegRoutes({
+                            apiKey: mapsApiKey,
+                            origin: origin.location,
+                            destination: destination.location,
+                            travelMode: modeToTravelMode(mode),
+                            alternatives: 0
+                        })
+                        const route = result[0]
+                        if (!route) continue
+
+                        const url = new URL(baseUrl)
+                        url.searchParams.set("travelmode", mode)
+
+                        options.push({
+                            mode,
+                            label: modeLabel(mode),
+                            duration: route.duration,
+                            distanceMeters: route.distanceMeters,
+                            estimatedCost: estimateCost({ mode, distanceMeters: route.distanceMeters, duration: route.duration }),
+                            mapsUrl: url.toString(),
+                            source: "google_routes",
+                            encodedPolyline: route.encodedPolyline
+                        })
+                    }
+
+                    if (options.length === 0) {
+                        const fallbackUrl = new URL(baseUrl)
+                        fallbackUrl.searchParams.set("travelmode", "driving")
+                        options.push({
+                            mode: "driving",
+                            label: "Driving",
+                            duration: "Unknown",
+                            distanceMeters: 0,
+                            estimatedCost: 0,
+                            mapsUrl: fallbackUrl.toString(),
+                            source: "mock"
+                        })
+                    }
+
+                    const primaryRoute = options[0]
 
                     return {
-                        origin: origin.name,
-                        destination: destination.name,
-                        routes
+                        leg: {
+                            origin: origin.name,
+                            destination: destination.name,
+                            routes: primaryRoute.encodedPolyline
+                                ? [{
+                                    distanceMeters: primaryRoute.distanceMeters,
+                                    duration: primaryRoute.duration,
+                                    encodedPolyline: primaryRoute.encodedPolyline
+                                }]
+                                : []
+                        },
+                        options
                     }
                 })
             )
 
+            const legs = legsWithOptions.map((item) => item.leg)
             setRoutesByLeg(legs)
 
-            // Default selection: option 0 for each leg
             const defaults: Record<number, number> = {}
-            legs.forEach((_, idx) => {
+            const routeOptionsLookup: Record<number, RouteOption[]> = {}
+            legsWithOptions.forEach((item, idx) => {
                 defaults[idx] = 0
+                routeOptionsLookup[idx] = item.options.slice(0, 3)
             })
             setSelectedRouteByLeg(defaults)
+            setRouteOptionsByLeg(routeOptionsLookup)
+
+            const plans: NavigationPlan[] = legsWithOptions.flatMap((item) => {
+                const option = item.options[0]
+                if (!option) return []
+                return [{
+                    origin: item.leg.origin,
+                    destination: item.leg.destination,
+                    method: option.mode,
+                    estimatedCost: option.estimatedCost,
+                    estimatedDuration: option.duration,
+                    mapsUrl: option.mapsUrl,
+                    source: option.source === "google_routes" ? "google_places" : "mock"
+                }]
+            })
+            setNavigationPlans(plans)
         } finally {
             setRoutesLoading(false)
         }
     }
 
     async function buildNavigationPlans() {
-        // This keeps your existing "open in Google Maps" links,
-        // now upgraded to include origin/destination_place_id when possible
         if (destinations.length < 2) return
+        if (Object.keys(routeOptionsByLeg).length > 0) {
+            const plans: NavigationPlan[] = Object.entries(routeOptionsByLeg).flatMap(([legIdx, options]) => {
+                const leg = routesByLeg[Number(legIdx)]
+                const selectedOption = options[selectedRouteByLeg[Number(legIdx)] ?? 0]
+                if (!leg || !selectedOption) return []
+                return [{
+                    origin: leg.origin,
+                    destination: leg.destination,
+                    method: selectedOption.mode,
+                    estimatedCost: selectedOption.estimatedCost,
+                    estimatedDuration: selectedOption.duration,
+                    mapsUrl: selectedOption.mapsUrl,
+                    source: selectedOption.source === "google_routes" ? "google_places" : "mock"
+                }]
+            })
+            setNavigationPlans(plans)
+            return
+        }
 
         setNavigationLoading(true)
         try {
-            if (!mapsApiKey) {
-                const mockPlans = destinations.slice(0, -1).map((origin, index) => {
-                    const destination = destinations[index + 1]
-                    return {
-                        origin,
-                        destination,
-                        mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`,
-                        source: "mock" as const
-                    }
-                })
-                setNavigationPlans(mockPlans)
-                return
-            }
-
-            async function lookupPlaceId(query: string): Promise<string | undefined> {
-                const apiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
-                if (!apiKey) throw new Error("Missing VITE_GOOGLE_API_KEY")
-
-                const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-Goog-Api-Key": apiKey,
-                        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location"
-                    },
-                    body: JSON.stringify({
-                        textQuery: query,
-                        pageSize: 1
-                    })
-                })
-
-                const data = (await response.json()) as { places?: Array<{ id?: string }> }
-                return data.places?.[0]?.id
-            }
-
-            const pairs = destinations.slice(0, -1).map((origin, index) => ({
-                origin,
-                destination: destinations[index + 1]
-            }))
-
-            const resolvedPlans = await Promise.all(
-                pairs.map(async ({ origin, destination }) => {
-                    const [originPlaceId, destinationPlaceId] = await Promise.all([
-                        lookupPlaceId(origin),
-                        lookupPlaceId(destination)
-                    ])
-
-                    const url = new URL("https://www.google.com/maps/dir/")
-                    url.searchParams.set("api", "1")
-                    url.searchParams.set("origin", origin)
-                    url.searchParams.set("destination", destination)
-                    url.searchParams.set("travelmode", transportMode === "train" ? "transit" : "driving")
-
-                    if (originPlaceId) url.searchParams.set("origin_place_id", originPlaceId)
-                    if (destinationPlaceId) url.searchParams.set("destination_place_id", destinationPlaceId)
-
-                    return {
-                        origin,
-                        destination,
-                        originPlaceId,
-                        destinationPlaceId,
-                        mapsUrl: url.toString(),
-                        source: "google_places" as const
-                    }
-                })
-            )
-
-            setNavigationPlans(resolvedPlans)
-        } catch {
-            const fallbackPlans = destinations.slice(0, -1).map((origin, index) => {
+            const fallbackPlans: NavigationPlan[] = destinations.slice(0, -1).map((origin, index) => {
                 const destination = destinations[index + 1]
+                const mode: "driving" | "transit" = transportMode === "train" ? "transit" : "driving"
                 return {
                     origin,
                     destination,
-                    mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`,
+                    method: mode,
+                    estimatedCost: mode === "driving" ? 18 : 9,
+                    estimatedDuration: "Unknown",
+                    mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=${mode}`,
                     source: "mock" as const
                 }
             })
@@ -661,16 +762,21 @@ export default function TripAdd() {
                 source: "google_places" as const
             }))
 
-            setAttractions(
-                options.length > 0
-                    ? options
-                    : [{ name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" }]
+            const nextAttractions = options.length > 0
+                ? options
+                : [{ name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" as const }]
+            setAttractions(nextAttractions)
+
+            const placeResults = await Promise.all(
+                nextAttractions.map((item) => resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` }))
             )
+            setAttractionPlaces(placeResults.flatMap((p) => (p ? [p] : [])))
         } catch {
             setAttractions([
                 { name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" },
                 { name: "Riverside Biking", location: destinations[0], price: 30, source: "mock" }
             ])
+            setAttractionPlaces([])
         } finally {
             setAttractionsLoading(false)
         }
@@ -801,6 +907,18 @@ export default function TripAdd() {
                                     Tip: Flights results are best when destinations are IATA metro/airport codes (ex: PAR, ROM, BCN).
                                     Routes/Places will work fine with city names.
                                 </Alert>
+
+                                {mapsApiKey && destinations.length > 0 && (
+                                    <APIProvider apiKey={mapsApiKey}>
+                                        <TripRouteMap
+                                            loading={false}
+                                            places={resolvedPlaces}
+                                            legs={[]}
+                                            selectedRouteByLeg={{}}
+                                            mapId={mapId}
+                                        />
+                                    </APIProvider>
+                                )}
                             </Stack>
                         )}
 
@@ -861,20 +979,20 @@ export default function TripAdd() {
                                                                     {leg.origin} → {leg.destination}
                                                                 </Typography>
 
-                                                                {leg.routes.length === 0 ? (
+                                                                {(routeOptionsByLeg[legIndex] ?? []).length === 0 ? (
                                                                     <Alert severity="warning">
                                                                         No route alternatives returned for this leg. Check API enablement and billing.
                                                                     </Alert>
                                                                 ) : (
                                                                     <Stack direction="row" spacing={1} flexWrap="wrap">
-                                                                        {leg.routes.map((r, routeIndex) => {
+                                                                        {(routeOptionsByLeg[legIndex] ?? []).map((r, routeIndex) => {
                                                                             const selected = (selectedRouteByLeg[legIndex] ?? 0) === routeIndex
                                                                             const miles = metersToMiles(r.distanceMeters)
 
                                                                             return (
                                                                                 <Chip
                                                                                     key={`${legIndex}-${routeIndex}`}
-                                                                                    label={`Option ${routeIndex + 1} • ${miles.toFixed(1)} mi • ${r.duration}`}
+                                                                                    label={`Option ${routeIndex + 1} • ${r.label} • ${miles.toFixed(1)} mi • ${r.duration} • ${toCurrency(r.estimatedCost)}`}
                                                                                     color={selected ? "primary" : "default"}
                                                                                     onClick={() =>
                                                                                         setSelectedRouteByLeg((prev) => ({
@@ -905,7 +1023,7 @@ export default function TripAdd() {
                                     onClick={buildNavigationPlans}
                                     disabled={navigationLoading || destinations.length < 2}
                                 >
-                                    {navigationLoading ? "Building navigation..." : "Build navigation links (Places)"}
+                                    {navigationLoading ? "Building navigation..." : "Build navigation summary"}
                                 </Button>
 
                                 {navigationPlans.length > 0 && (
@@ -915,8 +1033,11 @@ export default function TripAdd() {
                                                 <Typography sx={{ fontWeight: 700 }}>
                                                     {plan.origin} → {plan.destination}
                                                 </Typography>
+                                                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                                                    Method: {plan.method ?? "driving"} • ETA: {plan.estimatedDuration ?? "Unknown"}
+                                                </Typography>
                                                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                                    Source: {plan.source === "google_places" ? "Google Places" : "Mock fallback"}
+                                                    Estimated cost: {toCurrency(plan.estimatedCost ?? 0)} • Source: {plan.source === "google_places" ? "Google APIs" : "Mock fallback"}
                                                 </Typography>
                                                 <Button href={plan.mapsUrl} target="_blank" rel="noreferrer" size="small" variant="text">
                                                     Open navigation in Google Maps
@@ -1033,6 +1154,18 @@ export default function TripAdd() {
                                         </Paper>
                                     )
                                 })}
+
+                                {mapsApiKey && attractionPlaces.length > 0 && (
+                                    <APIProvider apiKey={mapsApiKey}>
+                                        <TripRouteMap
+                                            loading={false}
+                                            places={attractionPlaces}
+                                            legs={[]}
+                                            selectedRouteByLeg={{}}
+                                            mapId={mapId}
+                                        />
+                                    </APIProvider>
+                                )}
                             </Stack>
                         )}
                     </Paper>
