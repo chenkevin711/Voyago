@@ -1,9 +1,13 @@
 import { Box, Button, Container, Paper, Typography } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
+import { useCookies } from "react-cookie";
 import Navbar from "../components/Navbar";
 import DestinationMap from "../components/DestinationMap";
 
 export default function Landing() {
+    const [cookies] = useCookies(["loggedIn"]);
+    const isLoggedIn = Boolean(cookies.loggedIn);
+
     return (
         <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
             <Navbar />
@@ -36,15 +40,19 @@ export default function Landing() {
                     </Typography>
 
                     <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                        <Button component={RouterLink} to="/signup" variant="contained" size="large">
+                        <Button component={RouterLink} to="/dashboard" variant="contained" size="large">
                             Get Started
                         </Button>
-                        <Button component={RouterLink} to="/login" variant="outlined" size="large">
-                            Log In
-                        </Button>
-                        <Button component={RouterLink} to="/dashboard" variant="text" size="large">
-                            Preview Dashboard →
-                        </Button>
+                        {!isLoggedIn && (
+                            <>
+                                <Button component={RouterLink} to="/login" variant="outlined" size="large">
+                                    Log In
+                                </Button>
+                                <Button component={RouterLink} to="/dashboard" variant="text" size="large">
+                                    Preview Dashboard →
+                                </Button>
+                            </>
+                        )}
                     </Box>
 
                     <Box
