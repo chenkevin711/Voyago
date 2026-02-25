@@ -2,7 +2,9 @@ import express, {
   Request,
   Response,
   Router,
-  CookieOptions
+  CookieOptions,
+  RequestHandler,
+  NextFunction
 } from "express";
 import argon2 from 'argon2';
 import crypto from "crypto";
@@ -10,7 +12,7 @@ import { getCollection } from '../config/database';
 import { User, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse } from '../types';
 
 const router: Router = express.Router();
-let tokenStorage: { [key: string]: string } = {};
+export let tokenStorage: { [key: string]: string } = {};
 
 function getRandomToken() {
   return crypto.randomBytes(32).toString("hex");
