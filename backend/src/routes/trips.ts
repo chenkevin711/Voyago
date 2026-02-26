@@ -1,9 +1,10 @@
 import express, { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { connectToDatabase, getCollection } from "../config/database";
-import type { Trip, Budget, Expense } from "../types";
+import type { Trip, Budget, Expense, Itinerary } from "../types";
 
 const router = express.Router();
+
 function getParam(req: Request, name: string): string {
   const v = req.params?.[name];
   if (typeof v !== "string" || v.length === 0) {
@@ -63,12 +64,6 @@ async function tripsCol() {
  *  - req.body.userId  (POST/PATCH)
  * Replace this with req.user.id once you have auth middleware.
  */
-function getFirstString(v: unknown): string | undefined {
-  if (typeof v === "string") return v;
-  if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : undefined;
-  return undefined;
-}
-
 function getUserIdFromReq(req: Request): ObjectId {
   const q = req.query.userId;
   const b = (req.body as any)?.userId;
@@ -84,6 +79,7 @@ function getUserIdFromReq(req: Request): ObjectId {
 
   return toObjectId(raw);
 }
+
 // CREATE trip
 router.post("/", async (req: Request, res: Response) => {
   try {
@@ -104,6 +100,10 @@ router.post("/", async (req: Request, res: Response) => {
       endDate,
       notes,
       budget: recalcBudget(startDate, endDate, budget),
+      // itinerary starts empty unless you pass one
+      itinerary: req.body.itinerary
+        ? ({ ...req.body.itinerary, updatedAt: now } as Itinerary)
+        : undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -117,7 +117,22 @@ router.post("/", async (req: Request, res: Response) => {
     return res.status(400).json({ error: e.message ?? "Failed to create trip" });
   }
 });
+// LIST trips for current user
+router.get("/", async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    const col = await tripsCol();
 
+    const trips = await col
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    return res.json(trips);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message ?? "Failed to list trips" });
+  }
+});
 // GET trip by id
 router.get("/:id", async (req: Request, res: Response) => {
   try {
@@ -139,6 +154,7 @@ router.patch("/:id", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdFromReq(req);
     const _id = toObjectId(getParam(req, "id"));
+
     const col = await tripsCol();
     const existing = await col.findOne({ _id, userId });
     if (!existing) return res.status(404).json({ error: "Trip not found" });
@@ -167,7 +183,6 @@ router.patch("/:id", async (req: Request, res: Response) => {
 });
 
 // PATCH budget settings/categories
-// PATCH budget settings/categories
 router.patch("/:id/budget", async (req: Request, res: Response) => {
   try {
     const userId = getUserIdFromReq(req);
@@ -183,7 +198,7 @@ router.patch("/:id/budget", async (req: Request, res: Response) => {
       updatedAt: new Date().toISOString(),
     };
 
-    // 🚀 FIX HERE
+    // prevent userId from being written into budget
     const { userId: _ignore, ...budgetPatch } = req.body;
 
     const merged: Budget = {
@@ -250,6 +265,42 @@ router.post("/:id/expenses", async (req: Request, res: Response) => {
     return res.status(201).json(fresh);
   } catch (e: any) {
     return res.status(400).json({ error: e.message ?? "Failed to add expense" });
+  }
+});
+
+// PATCH itinerary (save selected attractions / optional days plan)
+router.patch("/:id/itinerary", async (req: Request, res: Response) => {
+  try {
+    const userId = getUserIdFromReq(req);
+    const _id = toObjectId(getParam(req, "id"));
+
+    const col = await tripsCol();
+    const trip = await col.findOne({ _id, userId });
+    if (!trip) return res.status(404).json({ error: "Trip not found" });
+
+    // prevent userId from being written into itinerary
+    const { userId: _ignore, ...itineraryPatch } = req.body;
+
+    const prev: Itinerary = trip.itinerary ?? {
+      selectedAttractions: [],
+      updatedAt: new Date().toISOString(),
+    };
+
+    const next: Itinerary = {
+      ...prev,
+      ...itineraryPatch,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await col.updateOne(
+      { _id, userId },
+      { $set: { itinerary: next, updatedAt: new Date().toISOString() } }
+    );
+
+    const fresh = await col.findOne({ _id, userId });
+    return res.json(fresh);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message ?? "Failed to update itinerary" });
   }
 });
 

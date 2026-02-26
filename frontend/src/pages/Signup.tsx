@@ -6,6 +6,8 @@ import { useCookies } from "react-cookie";
 import Navbar from "../components/Navbar";
 import { getAxiosErrorMessages } from "../utils";
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
+
 export default function Signup() {
   const navigate = useNavigate();
   const [cookies] = useCookies(["loggedIn"]);
@@ -17,12 +19,12 @@ export default function Signup() {
     password: "",
   });
 
-  // Return user to homepage if they are logged in.
+  // Redirect if already logged in
   useEffect(() => {
     if (cookies.loggedIn) {
       setTimeout(() => navigate("/"), 0);
     }
-  }, [cookies.loggedIn]);
+  }, [cookies.loggedIn, navigate]);
 
   const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
     setMessages([]);
@@ -36,20 +38,33 @@ export default function Signup() {
   const handleSubmit = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     setIsSuccess(false);
+
     try {
       const { status, data } = await axios({
         method: "post",
-        url: "/api/auth/register",
+        url: `${API_BASE}/api/auth/register`,
         data: formData,
+        withCredentials: true, // ✅ important
       });
+
       if (status !== 200) {
         setMessages([data?.message ?? "Request failed"]);
         return;
       }
+
+      // If your backend later returns user info + token,
+      // this will immediately support it.
+      if (data?.user?.id) {
+        localStorage.setItem("userId", data.user.id);
+      }
+
       setIsSuccess(true);
       setMessages([data?.message ?? "Account creation successful!"]);
       setFormData({ username: "", email: "", password: "" });
-      setTimeout(() => navigate("/"), 1000);
+
+      // Small delay so user sees success message
+      setTimeout(() => navigate("/login"), 1000);
+
     } catch (error) {
       console.error(error);
       setMessages(getAxiosErrorMessages(error));
@@ -68,11 +83,15 @@ export default function Signup() {
           <Typography sx={{ color: "text.secondary", mb: 3 }}>
             Start building itineraries in minutes.
           </Typography>
-          <Box sx={{ display: "grid", gap: 2 }}>
+
+          <Box component="form" onSubmit={handleSubmit} sx={{ display: "grid", gap: 2 }}>
             <TextField label="Name" id="username" fullWidth onChange={handleChange} value={formData.username} />
             <TextField label="Email" id="email" fullWidth onChange={handleChange} value={formData.email} />
             <TextField label="Password" id="password" type="password" fullWidth onChange={handleChange} value={formData.password} />
-            <Button variant="contained" size="large" onClick={handleSubmit}>Sign Up</Button>
+            <Button type="submit" variant="contained" size="large">
+              Sign Up
+            </Button>
+
             {messages.length > 0 && (
               <Box
                 sx={{
@@ -83,14 +102,21 @@ export default function Signup() {
                 }}
               >
                 {messages.map((message, index) => (
-                  <Typography key={index} variant="body2">{message}</Typography>
+                  <Typography key={index} variant="body2">
+                    {message}
+                  </Typography>
                 ))}
               </Box>
             )}
           </Box>
+
           <Typography sx={{ mt: 3, color: "text.secondary" }}>
             Already have an account?{" "}
-            <Typography component={RouterLink} to="/login" sx={{ color: "primary.main", textDecoration: "none", fontWeight: 600 }}>
+            <Typography
+              component={RouterLink}
+              to="/login"
+              sx={{ color: "primary.main", textDecoration: "none", fontWeight: 600 }}
+            >
               Log in
             </Typography>
           </Typography>

@@ -6,6 +6,8 @@ import { useState, useEffect } from "react";
 import { getAxiosErrorMessages } from "../utils";
 import { useCookies } from "react-cookie";
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
+
 export default function Login() {
   const [messages, setMessages] = useState<string[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -21,7 +23,7 @@ export default function Login() {
     if (cookies.loggedIn) {
       setTimeout(() => navigate("/"), 0);
     }
-  }, [cookies.loggedIn]);
+  }, [cookies.loggedIn, navigate]);
 
   const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
     setMessages([]);
@@ -35,20 +37,31 @@ export default function Login() {
   const handleSubmit = async (event: React.SyntheticEvent) => {
     event.preventDefault();
     setIsSuccess(false);
+
     try {
       const { status, data } = await axios({
         method: "post",
-        url: '/api/auth/login',
+        url: `${API_BASE}/api/auth/login`,
         data: formData,
+        withCredentials: true, // ✅ allow cookies
       });
 
       if (status !== 200) {
         setMessages([data?.message ?? "Request failed"]);
         return;
       }
+
+      // ✅ save userId so itinerary/trips can use it
+      if (data?.user?.id) {
+        localStorage.setItem("userId", data.user.id);
+      }
+
       setIsSuccess(true);
       setMessages(["Login successful!"]);
       setFormData({ email: "", password: "" });
+
+      // ✅ navigate after login
+      setTimeout(() => navigate("/"), 500);
     } catch (error) {
       console.error(error);
       setMessages(getAxiosErrorMessages(error));
@@ -67,10 +80,12 @@ export default function Login() {
           <Typography sx={{ color: "text.secondary", mb: 3 }}>
             Log in to continue planning your next trip.
           </Typography>
-          <Box sx={{ display: "grid", gap: 2 }}>
-            <TextField label="Email" id="email" fullWidth onChange={handleChange}/>
-            <TextField label="Password" id="password" type="password" fullWidth onChange={handleChange}/>
-            <Button variant="contained" size="large" onClick={handleSubmit}>Log In</Button>
+
+          <Box component="form" onSubmit={handleSubmit} sx={{ display: "grid", gap: 2 }}>
+            <TextField label="Email" id="email" fullWidth value={formData.email} onChange={handleChange} />
+            <TextField label="Password" id="password" type="password" fullWidth value={formData.password} onChange={handleChange} />
+            <Button type="submit" variant="contained" size="large">Log In</Button>
+
             {messages.length > 0 && (
               <Box
                 sx={{
@@ -86,6 +101,7 @@ export default function Login() {
               </Box>
             )}
           </Box>
+
           <Typography sx={{ mt: 3, color: "text.secondary" }}>
             Don’t have an account?{" "}
             <Typography component={RouterLink} to="/signup" sx={{ color: "primary.main", textDecoration: "none", fontWeight: 600 }}>

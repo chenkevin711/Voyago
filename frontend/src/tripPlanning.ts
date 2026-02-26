@@ -1,144 +1,254 @@
+import axios from "axios";
+
 export type TripCreationStep =
-    | "basics"
-    | "budget"
-    | "destinations"
-    | "transportation"
-    | "accommodations"
-    | "attractions";
+  | "basics"
+  | "budget"
+  | "destinations"
+  | "transportation"
+  | "accommodations"
+  | "attractions";
 
 export type FlightOption = {
-    airline: string;
-    route: string;
-    price: number;
-    source: "serpapi" | "mock";
+  airline: string;
+  route: string;
+  price: number;
+  source: "serpapi" | "mock";
 };
 
 export type StayOption = {
-    name: string;
-    location: string;
-    nightlyRate: number;
+  name: string;
+  location: string;
+  nightlyRate: number;
 };
 
 export type AttractionOption = {
-    name: string;
-    location: string;
-    price: number;
-    source: "google_places" | "mock";
+  name: string;
+  location: string;
+  price: number;
+  source: "google_places" | "mock";
 };
 
 export type NavigationPlan = {
-    origin: string;
-    destination: string;
-    method?: "driving" | "transit" | "walking";
-    estimatedCost?: number;
-    estimatedDuration?: string;
-    originPlaceId?: string;
-    destinationPlaceId?: string;
-    mapsUrl: string;
-    source: "google_places" | "mock";
+  origin: string;
+  destination: string;
+  method?: "driving" | "transit" | "walking";
+  estimatedCost?: number;
+  estimatedDuration?: string;
+  originPlaceId?: string;
+  destinationPlaceId?: string;
+  mapsUrl: string;
+  source: "google_places" | "mock";
 };
 
 export type PlannedTrip = {
-    id: string;
-    name: string;
-    startDate: string;
-    endDate: string;
-    budget: number;
-    destinations: string[];
-    flights: FlightOption[];
-    selectedFlight?: FlightOption;
-    transportationNotes: string;
-    navigationPlans: NavigationPlan[];
-    accommodations: StayOption[];
-    selectedAccommodation?: StayOption;
-    attractions: AttractionOption[];
-    selectedAttractions: AttractionOption[];
-    estimatedTotal: number;
-    members: number;
-    createdAt: string;
+  // IMPORTANT: this is now Mongo _id string
+  id: string;
+
+  // map Mongo fields -> frontend friendly
+  name: string;
+  startDate: string;
+  endDate: string;
+
+  // you previously had a single budget number; backend has structured budget.
+  // Keep this for UI if you want, but it may be derived.
+  budget: number;
+
+  destinations: string[];
+
+  flights: FlightOption[];
+  selectedFlight?: FlightOption;
+
+  transportationNotes: string;
+  navigationPlans: NavigationPlan[];
+
+  accommodations: StayOption[];
+  selectedAccommodation?: StayOption;
+
+  attractions: AttractionOption[];
+  selectedAttractions: AttractionOption[];
+
+  estimatedTotal: number;
+  members: number;
+
+  createdAt: string;
 };
 
-export const STORAGE_KEY = "voyago.plannedTrips";
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
-export function getSavedTrips(): PlannedTrip[] {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-        return [];
-    }
-
-    try {
-        const parsed = JSON.parse(raw) as PlannedTrip[];
-        if (!Array.isArray(parsed)) {
-            return [];
-        }
-
-        return parsed.map((trip) => ({
-            ...trip,
-            navigationPlans: trip.navigationPlans ?? [],
-        }));
-    } catch {
-        return [];
-    }
+function mustGetUserId(): string {
+  const userId = localStorage.getItem("userId");
+  if (!userId) throw new Error("Missing userId in localStorage");
+  return userId;
 }
 
-export function savePlannedTrip(trip: PlannedTrip): void {
-    const current = getSavedTrips();
-    const next = [trip, ...current.filter((t) => t.id !== trip.id)];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+function mongoToPlannedTrip(doc: any): PlannedTrip {
+  return {
+    id: doc._id,
+    name: doc.title ?? "Untitled Trip",
+    startDate: doc.startDate,
+    endDate: doc.endDate,
+    budget: doc.budget?.computed?.plannedTotal ?? doc.budget?.totalBudget ?? 0,
+    destinations: doc.destination ? [doc.destination] : [],
+    flights: doc.itinerary?.flights ?? [],
+    selectedFlight: doc.itinerary?.selectedFlight,
+    transportationNotes: doc.itinerary?.transportationNotes ?? "",
+    navigationPlans: doc.itinerary?.navigationPlans ?? [],
+    accommodations: doc.itinerary?.accommodations ?? [],
+    selectedAccommodation: doc.itinerary?.selectedAccommodation,
+    attractions: doc.itinerary?.attractions ?? [],
+    selectedAttractions: doc.itinerary?.selectedAttractions ?? [],
+    estimatedTotal: doc.itinerary?.estimatedTotal ?? 0,
+    members: doc.itinerary?.members ?? 1,
+    createdAt: doc.createdAt ?? new Date().toISOString(),
+  };
 }
 
-export function getPlannedTripById(id: string): PlannedTrip | undefined {
-    return getSavedTrips().find((trip) => trip.id === id);
+// ---------- DB-backed functions ----------
+
+export async function getSavedTrips(): Promise<PlannedTrip[]> {
+  const userId = mustGetUserId();
+  const { data } = await axios.get(`${API_BASE}/api/trips`, {
+    params: { userId },
+    withCredentials: true,
+  });
+  return (data as any[]).map(mongoToPlannedTrip);
 }
 
-export function updatePlannedTrip(id: string, updater: (trip: PlannedTrip) => PlannedTrip): PlannedTrip | undefined {
-    const current = getSavedTrips();
-    const existing = current.find((trip) => trip.id === id);
-    if (!existing) {
-        return undefined;
-    }
-
-    const updated = updater(existing);
-    const next = current.map((trip) => (trip.id === id ? updated : trip));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    return updated;
+export async function getPlannedTripById(id: string): Promise<PlannedTrip | undefined> {
+  const userId = mustGetUserId();
+  try {
+    const { data } = await axios.get(`${API_BASE}/api/trips/${id}`, {
+      params: { userId },
+      withCredentials: true,
+    });
+    return mongoToPlannedTrip(data);
+  } catch {
+    return undefined;
+  }
 }
 
-export function deletePlannedTrip(id: string): void {
-    const current = getSavedTrips();
-    const next = current.filter((trip) => trip.id !== id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+/**
+ * Creates a trip in Mongo (POST /api/trips) and returns the saved trip.
+ */
+export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
+  const userId = mustGetUserId();
+
+  // backend expects destination string (single) right now
+  const destination = trip.destinations?.[0] ?? "";
+
+  const payload = {
+    userId,
+    title: trip.name,
+    destination,
+    startDate: trip.startDate,
+    endDate: trip.endDate,
+    notes: "",
+    itinerary: {
+      // save itinerary details inside the trip doc
+      flights: trip.flights ?? [],
+      selectedFlight: trip.selectedFlight ?? null,
+      transportationNotes: trip.transportationNotes ?? "",
+      navigationPlans: trip.navigationPlans ?? [],
+      accommodations: trip.accommodations ?? [],
+      selectedAccommodation: trip.selectedAccommodation ?? null,
+      attractions: trip.attractions ?? [],
+      selectedAttractions: trip.selectedAttractions ?? [],
+      estimatedTotal: trip.estimatedTotal ?? 0,
+      members: trip.members ?? 1,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+
+  const { data } = await axios.post(`${API_BASE}/api/trips`, payload, {
+    withCredentials: true,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  return mongoToPlannedTrip(data);
 }
+
+/**
+ * Updates trip fields + itinerary in Mongo.
+ * Assumes you have PATCH /api/trips/:id and PATCH /api/trips/:id/itinerary
+ */
+export async function updatePlannedTrip(
+  id: string,
+  updater: (trip: PlannedTrip) => PlannedTrip
+): Promise<PlannedTrip | undefined> {
+  const current = await getPlannedTripById(id);
+  if (!current) return undefined;
+
+  const next = updater(current);
+  const userId = mustGetUserId();
+
+  // 1) patch core trip fields
+  await axios.patch(
+    `${API_BASE}/api/trips/${id}`,
+    {
+      userId,
+      title: next.name,
+      destination: next.destinations?.[0] ?? "",
+      startDate: next.startDate,
+      endDate: next.endDate,
+    },
+    { withCredentials: true }
+  );
+
+  // 2) patch itinerary details
+  await axios.patch(
+    `${API_BASE}/api/trips/${id}/itinerary`,
+    {
+      userId,
+      itinerary: {
+        flights: next.flights ?? [],
+        selectedFlight: next.selectedFlight ?? null,
+        transportationNotes: next.transportationNotes ?? "",
+        navigationPlans: next.navigationPlans ?? [],
+        accommodations: next.accommodations ?? [],
+        selectedAccommodation: next.selectedAccommodation ?? null,
+        attractions: next.attractions ?? [],
+        selectedAttractions: next.selectedAttractions ?? [],
+        estimatedTotal: next.estimatedTotal ?? 0,
+        members: next.members ?? 1,
+      },
+    },
+    { withCredentials: true }
+  );
+
+  const fresh = await getPlannedTripById(id);
+  return fresh ?? undefined;
+}
+
+export async function deletePlannedTrip(id: string): Promise<void> {
+  const userId = mustGetUserId();
+  await axios.delete(`${API_BASE}/api/trips/${id}`, {
+    data: { userId },
+    withCredentials: true,
+  });
+}
+
+// ---------- unchanged helpers ----------
 
 export function formatDateRange(startDate: string, endDate: string): string {
-    if (!startDate || !endDate) {
-        return "Dates TBD";
-    }
+  if (!startDate || !endDate) return "Dates TBD";
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-    if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) {
-        return "Dates TBD";
-    }
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return "Dates TBD";
 
-    return `${start.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-    })} – ${end.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-    })}`;
+  return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${end.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })}`;
 }
 
 export function tripNights(startDate: string, endDate: string): number {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-    const diff = end.valueOf() - start.valueOf();
-    if (Number.isNaN(diff) || diff <= 0) {
-        return 1;
-    }
+  const diff = end.valueOf() - start.valueOf();
+  if (Number.isNaN(diff) || diff <= 0) return 1;
 
-    return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
 }

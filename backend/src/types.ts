@@ -1,13 +1,7 @@
-/**
- * TypeScript Type 
- */
-
 import { ObjectId } from "mongodb";
 
 /**
  * Interface for users in the users collection
- * 
- * Represents the structure of user documents
  */
 export interface User {
   _id?: ObjectId;
@@ -15,7 +9,7 @@ export interface User {
   email: string;
   password_hash: string;
   profile_picture_url?: string;
-  role?: 'admin' | 'moderator' | 'user';
+  role?: "admin" | "moderator" | "user";
 }
 
 /**
@@ -83,8 +77,8 @@ export type Expense = {
 export type Budget = {
   currency: string; // e.g. "USD"
   method: "total" | "perDay" | "categories";
-  totalBudget?: number;   // if method="total"
-  dailyBudget?: number;   // if method="perDay"
+  totalBudget?: number; // if method="total"
+  dailyBudget?: number; // if method="perDay"
   categories?: BudgetCategory[]; // if method="categories"
   expenses?: Expense[];
   computed?: {
@@ -97,15 +91,35 @@ export type Budget = {
   updatedAt: string;
 };
 
+// ===== Itinerary Types =====
+
+export type ItineraryAttraction = {
+  name: string;
+  price: number;
+  location?: string;
+};
+
+export type ItineraryDay = {
+  label: string;      // "Day 1"
+  items: string[];    // attraction names (or ids later)
+};
+
+export type Itinerary = {
+  selectedAttractions: ItineraryAttraction[];
+  days?: ItineraryDay[];     // optional if you want to store day plan
+  updatedAt: string;
+};
+
 export interface Trip {
   _id?: ObjectId;
-  userId: ObjectId;       // store as ObjectId to match Mongo best practice
+  userId: ObjectId;
   title: string;
   destination: string;
-  startDate: string;      // ISO string
-  endDate: string;        // ISO string
+  startDate: string;
+  endDate: string;
   notes?: string;
   budget?: Budget;
+  itinerary?: Itinerary;
   createdAt: string;
   updatedAt: string;
 }

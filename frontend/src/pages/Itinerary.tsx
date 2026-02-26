@@ -1,191 +1,240 @@
-import { useMemo, useState } from "react";
-import {
-    Alert,
-    Box,
-    Button,
-    Chip,
-    Paper,
-    Stack,
-    Typography,
-} from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
 import { Link as RouterLink, useParams } from "react-router-dom";
-import {
-    APIProvider,
-    AdvancedMarker,
-    InfoWindow,
-    Map,
-    Pin,
-} from "@vis.gl/react-google-maps";
+import { APIProvider, AdvancedMarker, InfoWindow, Map, Pin } from "@vis.gl/react-google-maps";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
-import { formatDateRange, getPlannedTripById, tripNights, updatePlannedTrip } from "../tripPlanning";
+import { formatDateRange } from "../tripPlanning";
 
 type MarkerPoint = {
-    id: string;
-    label: string;
-    kind: "destination" | "attraction";
-    position: { lat: number; lng: number };
+  id: string;
+  label: string;
+  kind: "destination" | "attraction";
+  position: { lat: number; lng: number };
 };
 
+type DbAttraction = { name: string; price: number; location?: string };
+type DbTrip = {
+  _id: string;
+  title: string;
+  destination: string;
+  destinations?: string[];
+  startDate: string;
+  endDate: string;
+  itinerary?: {
+    selectedAttractions: DbAttraction[];
+  };
+};
+
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 const fallbackCenter = { lat: 46.5, lng: 8.4 };
 
 function hashToPoint(text: string): { lat: number; lng: number } {
-    const hash = Array.from(text).reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return {
-        lat: 30 + (hash % 50),
-        lng: -20 + (hash % 120),
-    };
+  const hash = Array.from(text).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return { lat: 30 + (hash % 50), lng: -20 + (hash % 120) };
 }
 
 export default function Itinerary() {
-    const { tripId } = useParams();
-    const [refresh, setRefresh] = useState(0);
-    const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
-    const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
-    const [selectedMarker, setSelectedMarker] = useState<MarkerPoint | null>(null);
+  const { tripId } = useParams();
+  const [refresh, setRefresh] = useState(0);
+  const [trip, setTrip] = useState<DbTrip | null>(null);
+  const [loading, setLoading] = useState(false);
 
-    const trip = useMemo(() => (tripId ? getPlannedTripById(tripId) : undefined), [tripId, refresh]);
+  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
+  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
+  const [selectedMarker, setSelectedMarker] = useState<MarkerPoint | null>(null);
 
-    const itineraryDays = useMemo(() => {
-        if (!trip) return [] as Array<{ label: string; items: string[] }>;
+  useEffect(() => {
+    if (!tripId) return;
 
-        const start = new Date(trip.startDate);
-        const end = new Date(trip.endDate);
-        const days = Math.max(1, Math.ceil((end.valueOf() - start.valueOf()) / 86400000));
+    (async () => {
+      try {
+        setLoading(true);
+        const userId = localStorage.getItem("userId");
+        if (!userId) {
+          setTrip(null);
+          return;
+        }
 
-        const base = Array.from({ length: days }, (_, index) => ({
-            label: `Day ${index + 1}`,
-            items: [] as string[],
-        }));
+        const res = await fetch(`${API_BASE}/api/trips/${tripId}?userId=${encodeURIComponent(userId)}`);
+        const data = await res.json();
 
-        trip.selectedAttractions.forEach((attraction, index) => {
-            base[index % base.length].items.push(attraction.name);
-        });
+        // If backend returns { error: ... }
+        if (!res.ok) {
+          setTrip(null);
+          return;
+        }
 
-        return base;
-    }, [trip]);
+        setTrip(data);
+      } catch {
+        setTrip(null);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [tripId, refresh]);
 
-    const mapPoints = useMemo(() => {
-        if (!trip) return [] as MarkerPoint[];
+  const destinations = useMemo(() => {
+    if (!trip) return [];
+    return trip.destinations?.length ? trip.destinations : [trip.destination];
+  }, [trip]);
 
-        const destinationPoints = trip.destinations.map((destination) => ({
-            id: `dest-${destination}`,
-            label: destination,
-            kind: "destination" as const,
-            position: hashToPoint(destination),
-        }));
+  const selectedAttractions = useMemo(() => {
+    return trip?.itinerary?.selectedAttractions ?? [];
+  }, [trip]);
 
-        const attractionPoints = trip.selectedAttractions.map((attraction) => ({
-            id: `att-${attraction.name}`,
-            label: attraction.name,
-            kind: "attraction" as const,
-            position: hashToPoint(attraction.location || attraction.name),
-        }));
+  const itineraryDays = useMemo(() => {
+    if (!trip) return [] as Array<{ label: string; items: string[] }>;
 
-        return [...destinationPoints, ...attractionPoints];
-    }, [trip]);
+    const start = new Date(trip.startDate);
+    const end = new Date(trip.endDate);
+    const days = Math.max(1, Math.ceil((end.valueOf() - start.valueOf()) / 86400000));
 
-    const center = mapPoints[0]?.position ?? fallbackCenter;
+    const base = Array.from({ length: days }, (_, index) => ({
+      label: `Day ${index + 1}`,
+      items: [] as string[],
+    }));
 
-    function deleteAttraction(name: string) {
-        if (!tripId) return;
+    selectedAttractions.forEach((attraction, index) => {
+      base[index % base.length].items.push(attraction.name);
+    });
 
-        updatePlannedTrip(tripId, (current) => ({
-            ...current,
-            selectedAttractions: current.selectedAttractions.filter((a) => a.name !== name),
-            estimatedTotal:
-                (current.selectedFlight?.price ?? 0) +
-                (current.selectedAccommodation
-                    ? current.selectedAccommodation.nightlyRate * tripNights(current.startDate, current.endDate)
-                    : 0) +
-                current.selectedAttractions.filter((a) => a.name !== name).reduce((sum, a) => sum + a.price, 0),
-        }));
+    return base;
+  }, [trip, selectedAttractions]);
 
-        setRefresh((v) => v + 1);
-    }
+  const mapPoints = useMemo(() => {
+    if (!trip) return [] as MarkerPoint[];
 
-    return (
-        <AppLayout>
-            <Page
-                title={trip?.name ? `${trip.name} Itinerary` : "Itinerary"}
-                subtitle={trip ? `${formatDateRange(trip.startDate, trip.endDate)} • ${trip.destinations.join(" → ")}` : "Trip not found"}
-            >
-                {!trip ? (
-                    <Alert severity="warning">Trip not found. Return to dashboard and open a saved trip.</Alert>
-                ) : (
-                    <Stack spacing={2}>
-                        <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
-                            <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Trip Map</Typography>
-                            {!mapsApiKey ? (
-                                <Alert severity="info">Add VITE_GOOGLE_API_KEY to display an interactive map with trip pins.</Alert>
-                            ) : (
-                                <APIProvider apiKey={mapsApiKey}>
-                                    <Box sx={{ height: { xs: 320, md: 420 }, borderRadius: 2, overflow: "hidden" }}>
-                                        <Map
-                                            defaultCenter={center}
-                                            defaultZoom={4}
-                                            mapId={mapId}
-                                            style={{ width: "100%", height: "100%" }}
-                                            mapTypeControl={false}
-                                            streetViewControl={false}
-                                            fullscreenControl={false}
-                                        >
-                                            {mapPoints.map((point) => (
-                                                <AdvancedMarker key={point.id} position={point.position} onClick={() => setSelectedMarker(point)}>
-                                                    <Pin
-                                                        background={point.kind === "destination" ? "#3367d6" : "#16a34a"}
-                                                        borderColor={point.kind === "destination" ? "#2b4db5" : "#15803d"}
-                                                        glyphColor="#ffffff"
-                                                    />
-                                                </AdvancedMarker>
-                                            ))}
+    const destinationPoints = destinations.map((destination) => ({
+      id: `dest-${destination}`,
+      label: destination,
+      kind: "destination" as const,
+      position: hashToPoint(destination),
+    }));
 
-                                            {selectedMarker && (
-                                                <InfoWindow position={selectedMarker.position} onCloseClick={() => setSelectedMarker(null)}>
-                                                    <Box>
-                                                        <Typography sx={{ fontWeight: 700 }}>{selectedMarker.label}</Typography>
-                                                        <Typography variant="body2" color="text.secondary">
-                                                            {selectedMarker.kind === "destination" ? "Destination" : "Selected attraction"}
-                                                        </Typography>
-                                                    </Box>
-                                                </InfoWindow>
-                                            )}
-                                        </Map>
-                                    </Box>
-                                </APIProvider>
-                            )}
-                        </Paper>
+    const attractionPoints = selectedAttractions.map((attraction) => ({
+      id: `att-${attraction.name}`,
+      label: attraction.name,
+      kind: "attraction" as const,
+      position: hashToPoint(attraction.location || attraction.name),
+    }));
 
-                        <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
-                            <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Selected Attractions</Typography>
-                            {trip.selectedAttractions.length === 0 ? (
-                                <Typography color="text.secondary">No attractions selected yet.</Typography>
-                            ) : (
-                                <Stack direction="row" gap={1} flexWrap="wrap">
-                                    {trip.selectedAttractions.map((attraction) => (
-                                        <Chip key={attraction.name} label={attraction.name} onDelete={() => deleteAttraction(attraction.name)} />
-                                    ))}
-                                </Stack>
-                            )}
-                        </Paper>
+    return [...destinationPoints, ...attractionPoints];
+  }, [trip, destinations, selectedAttractions]);
 
-                        <Box sx={{ display: "grid", gap: 1.5 }}>
-                            {itineraryDays.map((day) => (
-                                <Paper key={day.label} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
-                                    <Typography sx={{ fontWeight: 700 }}>{day.label}</Typography>
-                                    <Typography color="text.secondary" variant="body2">
-                                        {day.items.length > 0 ? day.items.join(", ") : "No activities assigned yet."}
-                                    </Typography>
-                                </Paper>
-                            ))}
-                        </Box>
+  const center = mapPoints[0]?.position ?? fallbackCenter;
 
-                        <Button component={RouterLink} to={`/trips/${trip.id}`} variant="outlined" sx={{ width: "fit-content" }}>
-                            Back to overview
-                        </Button>
-                    </Stack>
-                )}
-            </Page>
-        </AppLayout>
-    );
+  async function deleteAttraction(name: string) {
+    if (!tripId || !trip) return;
+
+    const userId = localStorage.getItem("userId");
+    if (!userId) return;
+
+    const nextSelected = selectedAttractions.filter((a) => a.name !== name);
+
+    await fetch(`${API_BASE}/api/trips/${tripId}/itinerary`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      // If you later switch to cookie auth, add: credentials: "include",
+      body: JSON.stringify({
+        userId,
+        selectedAttractions: nextSelected,
+      }),
+    });
+
+    setRefresh((v) => v + 1);
+  }
+
+  return (
+    <AppLayout>
+      <Page
+        title={trip?.title ? `${trip.title} Itinerary` : "Itinerary"}
+        subtitle={
+          trip
+            ? `${formatDateRange(trip.startDate, trip.endDate)} • ${destinations.join(" → ")}`
+            : "Trip not found"
+        }
+      >
+        {loading ? (
+          <Alert severity="info">Loading itinerary…</Alert>
+        ) : !trip ? (
+          <Alert severity="warning">
+            Trip not found (or you’re not logged in). Make sure you have a valid userId in localStorage and open a saved trip.
+          </Alert>
+        ) : (
+          <Stack spacing={2}>
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
+              <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Trip Map</Typography>
+              {!mapsApiKey ? (
+                <Alert severity="info">Add VITE_GOOGLE_API_KEY to display an interactive map with trip pins.</Alert>
+              ) : (
+                <APIProvider apiKey={mapsApiKey}>
+                  <Box sx={{ height: { xs: 320, md: 420 }, borderRadius: 2, overflow: "hidden" }}>
+                    <Map
+                      defaultCenter={center}
+                      defaultZoom={4}
+                      mapId={mapId}
+                      style={{ width: "100%", height: "100%" }}
+                      mapTypeControl={false}
+                      streetViewControl={false}
+                      fullscreenControl={false}
+                    >
+                      {mapPoints.map((point) => (
+                        <AdvancedMarker key={point.id} position={point.position} onClick={() => setSelectedMarker(point)}>
+                          <Pin
+                            background={point.kind === "destination" ? "#3367d6" : "#16a34a"}
+                            borderColor={point.kind === "destination" ? "#2b4db5" : "#15803d"}
+                            glyphColor="#ffffff"
+                          />
+                        </AdvancedMarker>
+                      ))}
+
+                      {selectedMarker && (
+                        <InfoWindow position={selectedMarker.position} onCloseClick={() => setSelectedMarker(null)}>
+                          <Box>
+                            <Typography sx={{ fontWeight: 700 }}>{selectedMarker.label}</Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {selectedMarker.kind === "destination" ? "Destination" : "Selected attraction"}
+                            </Typography>
+                          </Box>
+                        </InfoWindow>
+                      )}
+                    </Map>
+                  </Box>
+                </APIProvider>
+              )}
+            </Paper>
+
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
+              <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Selected Attractions</Typography>
+              {selectedAttractions.length === 0 ? (
+                <Typography color="text.secondary">No attractions selected yet.</Typography>
+              ) : (
+                <Stack direction="row" gap={1} flexWrap="wrap">
+                  {selectedAttractions.map((attraction) => (
+                    <Chip key={attraction.name} label={attraction.name} onDelete={() => deleteAttraction(attraction.name)} />
+                  ))}
+                </Stack>
+              )}
+            </Paper>
+
+            <Box sx={{ display: "grid", gap: 1.5 }}>
+              {itineraryDays.map((day) => (
+                <Paper key={day.label} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                  <Typography sx={{ fontWeight: 700 }}>{day.label}</Typography>
+                  <Typography color="text.secondary" variant="body2">
+                    {day.items.length > 0 ? day.items.join(", ") : "No activities assigned yet."}
+                  </Typography>
+                </Paper>
+              ))}
+            </Box>
+
+            <Button component={RouterLink} to={`/trips/${trip._id}`} variant="outlined" sx={{ width: "fit-content" }}>
+              Back to overview
+            </Button>
+          </Stack>
+        )}
+      </Page>
+    </AppLayout>
+  );
 }
