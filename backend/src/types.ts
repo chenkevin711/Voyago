@@ -63,3 +63,49 @@ export interface RegisterResponse {
   };
   token?: string;
 }
+
+// ===== Trips / Budget Types =====
+
+export type BudgetCategory = {
+  name: string;
+  planned: number;
+};
+
+export type Expense = {
+  _id: ObjectId;
+  name: string;
+  category?: string;
+  amount: number;
+  date: string; // ISO string
+  notes?: string;
+};
+
+export type Budget = {
+  currency: string; // e.g. "USD"
+  method: "total" | "perDay" | "categories";
+  totalBudget?: number;   // if method="total"
+  dailyBudget?: number;   // if method="perDay"
+  categories?: BudgetCategory[]; // if method="categories"
+  expenses?: Expense[];
+  computed?: {
+    plannedTotal: number;
+    actualTotal: number;
+    remaining: number;
+    tripDays: number;
+    perDayPlanned: number;
+  };
+  updatedAt: string;
+};
+
+export interface Trip {
+  _id?: ObjectId;
+  userId: ObjectId;       // store as ObjectId to match Mongo best practice
+  title: string;
+  destination: string;
+  startDate: string;      // ISO string
+  endDate: string;        // ISO string
+  notes?: string;
+  budget?: Budget;
+  createdAt: string;
+  updatedAt: string;
+}
