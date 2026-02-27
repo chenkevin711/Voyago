@@ -41,16 +41,15 @@ export type NavigationPlan = {
 };
 
 export type PlannedTrip = {
-  // IMPORTANT: this is now Mongo _id string
+  // Mongo _id string
   id: string;
 
-  // map Mongo fields -> frontend friendly
+  // backend -> frontend mapping
   name: string;
   startDate: string;
   endDate: string;
 
-  // you previously had a single budget number; backend has structured budget.
-  // Keep this for UI if you want, but it may be derived.
+  // derived for UI
   budget: number;
 
   destinations: string[];
@@ -75,12 +74,6 @@ export type PlannedTrip = {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
-function mustGetUserId(): string {
-  const userId = localStorage.getItem("userId");
-  if (!userId) throw new Error("Missing userId in localStorage");
-  return userId;
-}
-
 function mongoToPlannedTrip(doc: any): PlannedTrip {
   return {
     id: doc._id,
@@ -90,11 +83,11 @@ function mongoToPlannedTrip(doc: any): PlannedTrip {
     budget: doc.budget?.computed?.plannedTotal ?? doc.budget?.totalBudget ?? 0,
     destinations: doc.destination ? [doc.destination] : [],
     flights: doc.itinerary?.flights ?? [],
-    selectedFlight: doc.itinerary?.selectedFlight,
+    selectedFlight: doc.itinerary?.selectedFlight ?? undefined,
     transportationNotes: doc.itinerary?.transportationNotes ?? "",
     navigationPlans: doc.itinerary?.navigationPlans ?? [],
     accommodations: doc.itinerary?.accommodations ?? [],
-    selectedAccommodation: doc.itinerary?.selectedAccommodation,
+    selectedAccommodation: doc.itinerary?.selectedAccommodation ?? undefined,
     attractions: doc.itinerary?.attractions ?? [],
     selectedAttractions: doc.itinerary?.selectedAttractions ?? [],
     estimatedTotal: doc.itinerary?.estimatedTotal ?? 0,
@@ -103,22 +96,25 @@ function mongoToPlannedTrip(doc: any): PlannedTrip {
   };
 }
 
+/**
+ * IMPORTANT:
+ * This file no longer reads userId from localStorage/cookies.
+ * It relies entirely on cookie-based auth (token cookie) via withCredentials.
+ * Backend must derive userId from the token cookie.
+ */
+
 // ---------- DB-backed functions ----------
 
 export async function getSavedTrips(): Promise<PlannedTrip[]> {
-  const userId = mustGetUserId();
   const { data } = await axios.get(`${API_BASE}/api/trips`, {
-    params: { userId },
     withCredentials: true,
   });
   return (data as any[]).map(mongoToPlannedTrip);
 }
 
 export async function getPlannedTripById(id: string): Promise<PlannedTrip | undefined> {
-  const userId = mustGetUserId();
   try {
     const { data } = await axios.get(`${API_BASE}/api/trips/${id}`, {
-      params: { userId },
       withCredentials: true,
     });
     return mongoToPlannedTrip(data);
@@ -131,20 +127,15 @@ export async function getPlannedTripById(id: string): Promise<PlannedTrip | unde
  * Creates a trip in Mongo (POST /api/trips) and returns the saved trip.
  */
 export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
-  const userId = mustGetUserId();
-
-  // backend expects destination string (single) right now
   const destination = trip.destinations?.[0] ?? "";
 
   const payload = {
-    userId,
     title: trip.name,
     destination,
     startDate: trip.startDate,
     endDate: trip.endDate,
     notes: "",
     itinerary: {
-      // save itinerary details inside the trip doc
       flights: trip.flights ?? [],
       selectedFlight: trip.selectedFlight ?? null,
       transportationNotes: trip.transportationNotes ?? "",
@@ -169,7 +160,9 @@ export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
 
 /**
  * Updates trip fields + itinerary in Mongo.
- * Assumes you have PATCH /api/trips/:id and PATCH /api/trips/:id/itinerary
+ * Assumes:
+ *  - PATCH /api/trips/:id
+ *  - PATCH /api/trips/:id/itinerary
  */
 export async function updatePlannedTrip(
   id: string,
@@ -179,13 +172,10 @@ export async function updatePlannedTrip(
   if (!current) return undefined;
 
   const next = updater(current);
-  const userId = mustGetUserId();
 
-  // 1) patch core trip fields
   await axios.patch(
     `${API_BASE}/api/trips/${id}`,
     {
-      userId,
       title: next.name,
       destination: next.destinations?.[0] ?? "",
       startDate: next.startDate,
@@ -194,35 +184,29 @@ export async function updatePlannedTrip(
     { withCredentials: true }
   );
 
-  // 2) patch itinerary details
+  // NOTE: your backend currently merges itineraryPatch directly, not nested under "itinerary".
   await axios.patch(
     `${API_BASE}/api/trips/${id}/itinerary`,
     {
-      userId,
-      itinerary: {
-        flights: next.flights ?? [],
-        selectedFlight: next.selectedFlight ?? null,
-        transportationNotes: next.transportationNotes ?? "",
-        navigationPlans: next.navigationPlans ?? [],
-        accommodations: next.accommodations ?? [],
-        selectedAccommodation: next.selectedAccommodation ?? null,
-        attractions: next.attractions ?? [],
-        selectedAttractions: next.selectedAttractions ?? [],
-        estimatedTotal: next.estimatedTotal ?? 0,
-        members: next.members ?? 1,
-      },
+      flights: next.flights ?? [],
+      selectedFlight: next.selectedFlight ?? null,
+      transportationNotes: next.transportationNotes ?? "",
+      navigationPlans: next.navigationPlans ?? [],
+      accommodations: next.accommodations ?? [],
+      selectedAccommodation: next.selectedAccommodation ?? null,
+      attractions: next.attractions ?? [],
+      selectedAttractions: next.selectedAttractions ?? [],
+      estimatedTotal: next.estimatedTotal ?? 0,
+      members: next.members ?? 1,
     },
     { withCredentials: true }
   );
 
-  const fresh = await getPlannedTripById(id);
-  return fresh ?? undefined;
+  return await getPlannedTripById(id);
 }
 
 export async function deletePlannedTrip(id: string): Promise<void> {
-  const userId = mustGetUserId();
   await axios.delete(`${API_BASE}/api/trips/${id}`, {
-    data: { userId },
     withCredentials: true,
   });
 }
@@ -237,7 +221,10 @@ export function formatDateRange(startDate: string, endDate: string): string {
 
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return "Dates TBD";
 
-  return `${start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${end.toLocaleDateString(undefined, {
+  return `${start.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })} – ${end.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
   })}`;

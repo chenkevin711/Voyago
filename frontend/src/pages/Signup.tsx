@@ -1,8 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import axios from "axios";
 import { Box, Button, Container, Paper, TextField, Typography } from "@mui/material";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
-import { useCookies } from "react-cookie";
 import Navbar from "../components/Navbar";
 import { getAxiosErrorMessages } from "../utils";
 
@@ -10,65 +9,54 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
 export default function Signup() {
   const navigate = useNavigate();
-  const [cookies] = useCookies(["loggedIn"]);
+
   const [messages, setMessages] = useState<string[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
   const [formData, setFormData] = useState({
     username: "",
     email: "",
     password: "",
   });
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (cookies.loggedIn) {
-      setTimeout(() => navigate("/"), 0);
-    }
-  }, [cookies.loggedIn, navigate]);
-
   const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
     setMessages([]);
     setIsSuccess(false);
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       [event.target.id]: event.target.value,
-    });
+    }));
   };
 
   const handleSubmit = async (event: React.SyntheticEvent) => {
     event.preventDefault();
+    setMessages([]);
     setIsSuccess(false);
+    setSubmitting(true);
 
     try {
-      const { status, data } = await axios({
-        method: "post",
-        url: `${API_BASE}/api/auth/register`,
-        data: formData,
-        withCredentials: true, // ✅ important
+      const res = await axios.post(`${API_BASE}/api/auth/register`, formData, {
+        withCredentials: true, // ✅ sets httpOnly token cookie
       });
 
-      if (status !== 200) {
-        setMessages([data?.message ?? "Request failed"]);
-        return;
-      }
-
-      // If your backend later returns user info + token,
-      // this will immediately support it.
-      if (data?.user?.id) {
-        localStorage.setItem("userId", data.user.id);
+      // ✅ keep if you still use userId anywhere in the UI
+      if (res.data?.user?.id) {
+        localStorage.setItem("userId", res.data.user.id);
       }
 
       setIsSuccess(true);
-      setMessages([data?.message ?? "Account creation successful!"]);
+      setMessages([res.data?.message ?? "Account created!"]);
       setFormData({ username: "", email: "", password: "" });
 
-      // Small delay so user sees success message
-      setTimeout(() => navigate("/login"), 1000);
-
+      // If register also logs them in (it does in your backend), go straight to dashboard
+      navigate("/dashboard");
     } catch (error) {
       console.error(error);
       setMessages(getAxiosErrorMessages(error));
       setIsSuccess(false);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -88,8 +76,9 @@ export default function Signup() {
             <TextField label="Name" id="username" fullWidth onChange={handleChange} value={formData.username} />
             <TextField label="Email" id="email" fullWidth onChange={handleChange} value={formData.email} />
             <TextField label="Password" id="password" type="password" fullWidth onChange={handleChange} value={formData.password} />
-            <Button type="submit" variant="contained" size="large">
-              Sign Up
+
+            <Button type="submit" variant="contained" size="large" disabled={submitting}>
+              {submitting ? "Signing up..." : "Sign Up"}
             </Button>
 
             {messages.length > 0 && (

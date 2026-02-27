@@ -99,27 +99,49 @@ export type ItineraryAttraction = {
   location?: string;
 };
 
+export type ItineraryEvent = {
+  id: string; // frontend-friendly id (uuid)
+  dayIndex: number; // which day this event belongs to
+  startTime?: string; // "09:00"
+  endTime?: string; // "10:30"
+  title: string;
+  description?: string;
+  location?: string;
+  cost?: number;
+};
+
 export type ItineraryDay = {
-  label: string;      // "Day 1"
-  items: string[];    // attraction names (or ids later)
+  label: string; // "Day 1"
+  items: string[]; // attraction names (or ids later)
 };
 
 export type Itinerary = {
   selectedAttractions: ItineraryAttraction[];
-  days?: ItineraryDay[];     // optional if you want to store day plan
+  events?: ItineraryEvent[];
+  days?: ItineraryDay[];
   updatedAt: string;
 };
+
+// ===== Trip Type (THIS IS WHAT YOU WERE MISSING) =====
 
 export interface Trip {
   _id?: ObjectId;
   userId: ObjectId;
+
   title: string;
+
+  // keep your current backend field, and optionally support multiple destinations too
   destination: string;
+  destinations?: string[];
+
   startDate: string;
   endDate: string;
+
   notes?: string;
+
   budget?: Budget;
   itinerary?: Itinerary;
+
   createdAt: string;
   updatedAt: string;
 }

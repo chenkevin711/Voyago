@@ -1,7 +1,8 @@
 import express, { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { connectToDatabase, getCollection } from "../config/database";
-import type { Trip, Budget, Expense, Itinerary } from "../types";
+import type { Trip, Budget, Itinerary } from "../types";
+import { getSession } from "../SessionStore";
 
 const router = express.Router();
 
@@ -16,6 +17,16 @@ function getParam(req: Request, name: string): string {
 function toObjectId(id: string) {
   if (!ObjectId.isValid(id)) throw new Error("Invalid ObjectId");
   return new ObjectId(id);
+}
+
+function requireUserId(req: Request): ObjectId {
+  const token = req.cookies?.token;
+  if (!token) throw new Error("Not logged in");
+
+  const session = getSession(token);
+  if (!session?.userId) throw new Error("Invalid session. Please log in again.");
+
+  return toObjectId(session.userId);
 }
 
 function daysBetweenInclusive(startISO: string, endISO: string) {
@@ -51,39 +62,15 @@ function recalcBudget(startDate: string, endDate: string, budget?: Budget): Budg
   return { ...budget, computed, updatedAt: new Date().toISOString() };
 }
 
-// Helper: get trips collection
 async function tripsCol() {
   await connectToDatabase();
   return getCollection<Trip>("trips");
 }
 
-/**
- * IMPORTANT (auth):
- * For now, we read userId from:
- *  - req.query.userId (GET)
- *  - req.body.userId  (POST/PATCH)
- * Replace this with req.user.id once you have auth middleware.
- */
-function getUserIdFromReq(req: Request): ObjectId {
-  const q = req.query.userId;
-  const b = (req.body as any)?.userId;
-
-  const rawQ = Array.isArray(q) ? q[0] : q;
-  const rawB = Array.isArray(b) ? b[0] : b;
-
-  const raw = rawQ ?? rawB;
-
-  if (typeof raw !== "string") {
-    throw new Error("Missing userId");
-  }
-
-  return toObjectId(raw);
-}
-
-// CREATE trip
+// CREATE trip (this is the "save" endpoint)
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = requireUserId(req);
     const { title, destination, startDate, endDate, notes, budget } = req.body;
 
     if (!title || !destination || !startDate || !endDate) {
@@ -100,43 +87,38 @@ router.post("/", async (req: Request, res: Response) => {
       endDate,
       notes,
       budget: recalcBudget(startDate, endDate, budget),
-      // itinerary starts empty unless you pass one
-      itinerary: req.body.itinerary
-        ? ({ ...req.body.itinerary, updatedAt: now } as Itinerary)
-        : undefined,
+      itinerary: req.body.itinerary ? ({ ...req.body.itinerary, updatedAt: now } as Itinerary) : undefined,
       createdAt: now,
       updatedAt: now,
     };
 
     const col = await tripsCol();
     const result = await col.insertOne(trip as any);
+    const saved = await col.findOne({ _id: result.insertedId, userId });
 
-    const saved = await col.findOne({ _id: result.insertedId });
     return res.status(201).json(saved);
   } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to create trip" });
+    return res.status(401).json({ error: e.message ?? "Failed to create trip" });
   }
 });
-// LIST trips for current user
+
+// LIST trips
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = requireUserId(req);
     const col = await tripsCol();
 
-    const trips = await col
-      .find({ userId })
-      .sort({ createdAt: -1 })
-      .toArray();
-
+    const trips = await col.find({ userId }).sort({ createdAt: -1 }).toArray();
     return res.json(trips);
   } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to list trips" });
+    return res.status(401).json({ error: e.message ?? "Failed to list trips" });
   }
 });
+
 // GET trip by id
 router.get("/:id", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = requireUserId(req);
     const _id = toObjectId(getParam(req, "id"));
 
     const col = await tripsCol();
@@ -145,14 +127,14 @@ router.get("/:id", async (req: Request, res: Response) => {
     if (!trip) return res.status(404).json({ error: "Trip not found" });
     return res.json(trip);
   } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to fetch trip" });
+    return res.status(401).json({ error: e.message ?? "Failed to fetch trip" });
   }
 });
 
-// PATCH trip details (title/destination/dates/notes)
+// PATCH trip (core fields)
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = requireUserId(req);
     const _id = toObjectId(getParam(req, "id"));
 
     const col = await tripsCol();
@@ -161,13 +143,10 @@ router.patch("/:id", async (req: Request, res: Response) => {
 
     const allowed = ["title", "destination", "startDate", "endDate", "notes"] as const;
     const patch: any = {};
-    for (const k of allowed) {
-      if (req.body[k] !== undefined) patch[k] = req.body[k];
-    }
+    for (const k of allowed) if (req.body[k] !== undefined) patch[k] = req.body[k];
 
     const nextStart = patch.startDate ?? existing.startDate;
     const nextEnd = patch.endDate ?? existing.endDate;
-
     const nextBudget = recalcBudget(nextStart, nextEnd, existing.budget);
 
     await col.updateOne(
@@ -178,117 +157,36 @@ router.patch("/:id", async (req: Request, res: Response) => {
     const fresh = await col.findOne({ _id, userId });
     return res.json(fresh);
   } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to update trip" });
+    return res.status(401).json({ error: e.message ?? "Failed to update trip" });
   }
 });
 
-// PATCH budget settings/categories
-router.patch("/:id/budget", async (req: Request, res: Response) => {
-  try {
-    const userId = getUserIdFromReq(req);
-    const _id = toObjectId(getParam(req, "id"));
-
-    const col = await tripsCol();
-    const trip = await col.findOne({ _id, userId });
-    if (!trip) return res.status(404).json({ error: "Trip not found" });
-
-    const prevBudget: Budget = trip.budget ?? {
-      currency: "USD",
-      method: "total",
-      updatedAt: new Date().toISOString(),
-    };
-
-    // prevent userId from being written into budget
-    const { userId: _ignore, ...budgetPatch } = req.body;
-
-    const merged: Budget = {
-      ...prevBudget,
-      ...budgetPatch,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const nextBudget = recalcBudget(trip.startDate, trip.endDate, merged);
-
-    await col.updateOne(
-      { _id, userId },
-      { $set: { budget: nextBudget, updatedAt: new Date().toISOString() } }
-    );
-
-    const fresh = await col.findOne({ _id, userId });
-    return res.json(fresh);
-  } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to update budget" });
-  }
-});
-
-// POST add expense
-router.post("/:id/expenses", async (req: Request, res: Response) => {
-  try {
-    const userId = getUserIdFromReq(req);
-    const _id = toObjectId(getParam(req, "id"));
-
-    const { name, amount, category, date, notes } = req.body;
-    if (!name || amount === undefined) {
-      return res.status(400).json({ error: "name and amount required" });
-    }
-
-    const col = await tripsCol();
-    const trip = await col.findOne({ _id, userId });
-    if (!trip) return res.status(404).json({ error: "Trip not found" });
-
-    const expense: Expense = {
-      _id: new ObjectId(),
-      name,
-      category,
-      amount: Number(amount),
-      date: date ?? new Date().toISOString(),
-      notes,
-    };
-
-    const budget: Budget = trip.budget ?? {
-      currency: "USD",
-      method: "total",
-      updatedAt: new Date().toISOString(),
-    };
-
-    const nextBudget = recalcBudget(trip.startDate, trip.endDate, {
-      ...budget,
-      expenses: [...(budget.expenses ?? []), expense],
-    });
-
-    await col.updateOne(
-      { _id, userId },
-      { $set: { budget: nextBudget, updatedAt: new Date().toISOString() } }
-    );
-
-    const fresh = await col.findOne({ _id, userId });
-    return res.status(201).json(fresh);
-  } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to add expense" });
-  }
-});
-
-// PATCH itinerary (save selected attractions / optional days plan)
+// PATCH itinerary
+// Supports BOTH payload shapes:
+//  A) { flights, selectedFlight, ... }  (flat)
+//  B) { itinerary: { flights, selectedFlight, ... } }  (nested)
 router.patch("/:id/itinerary", async (req: Request, res: Response) => {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = requireUserId(req);
     const _id = toObjectId(getParam(req, "id"));
 
     const col = await tripsCol();
     const trip = await col.findOne({ _id, userId });
     if (!trip) return res.status(404).json({ error: "Trip not found" });
 
-    // prevent userId from being written into itinerary
-    const { userId: _ignore, ...itineraryPatch } = req.body;
+    const patch = (req.body as any)?.itinerary ?? req.body;
 
-    const prev: Itinerary = trip.itinerary ?? {
-      selectedAttractions: [],
-      updatedAt: new Date().toISOString(),
-    };
+    const prev: Itinerary =
+      trip.itinerary ?? ({ selectedAttractions: [], events: [], updatedAt: new Date().toISOString() } as any);
+
+    // Minimal guard: if events exists, ensure it's an array
+    if (patch?.events !== undefined && !Array.isArray(patch.events)) {
+      return res.status(400).json({ error: "itinerary.events must be an array" });
+    }
 
     const next: Itinerary = {
       ...prev,
-      ...itineraryPatch,
+      ...patch,
       updatedAt: new Date().toISOString(),
     };
 
@@ -300,7 +198,23 @@ router.patch("/:id/itinerary", async (req: Request, res: Response) => {
     const fresh = await col.findOne({ _id, userId });
     return res.json(fresh);
   } catch (e: any) {
-    return res.status(400).json({ error: e.message ?? "Failed to update itinerary" });
+    return res.status(401).json({ error: e.message ?? "Failed to update itinerary" });
+  }
+});
+
+// DELETE trip
+router.delete("/:id", async (req: Request, res: Response) => {
+  try {
+    const userId = requireUserId(req);
+    const _id = toObjectId(getParam(req, "id"));
+
+    const col = await tripsCol();
+    const result = await col.deleteOne({ _id, userId });
+
+    if (result.deletedCount === 0) return res.status(404).json({ error: "Trip not found" });
+    return res.status(200).json({ success: true });
+  } catch (e: any) {
+    return res.status(401).json({ error: e.message ?? "Failed to delete trip" });
   }
 });
 
