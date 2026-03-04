@@ -37,6 +37,12 @@ import {
     Pin,
     useMap
 } from "@vis.gl/react-google-maps"
+import {
+    getTransportPlan,
+    resolveAirport,
+    type ResolvedAirport,
+    type TransportPlanResponse
+} from "../api/transport"
 
 const stepTitles = [
     "Name + Dates",
@@ -87,6 +93,13 @@ type LegRoutes = {
 
 function toCurrency(amount: number): string {
     return `$${amount.toLocaleString()}`
+}
+
+function toDuration(minutes?: number): string {
+    if (!minutes) return "Unknown"
+    const h = Math.floor(minutes / 60)
+    const m = minutes % 60
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
 function slugify(value: string): string {
@@ -276,66 +289,6 @@ async function computeLegRoutes(params: {
 }
 
 /**
- * SerpApi Google Flights
- * Note: SerpApi works best with IATA metro/airport codes (ex: NYC, PAR, ROM)
- * If users type city names, you should map them to codes later (autocomplete or dataset)
- */
-async function fetchFlightsSerpApi(params: {
-    serpApiKey: string
-    departureId: string
-    arrivalId: string
-    outboundDate: string
-    returnDate: string
-}): Promise<FlightOption[]> {
-    const url = new URL("https://serpapi.com/search.json")
-    url.searchParams.set("engine", "google_flights")
-    url.searchParams.set("api_key", params.serpApiKey)
-    url.searchParams.set("departure_id", params.departureId)
-    url.searchParams.set("arrival_id", params.arrivalId)
-    url.searchParams.set("outbound_date", params.outboundDate)
-    url.searchParams.set("return_date", params.returnDate)
-    url.searchParams.set("currency", "USD")
-
-    const res = await fetch(url.toString())
-    if (!res.ok) return []
-
-    const data = (await res.json()) as {
-        best_flights?: Array<{
-            price?: number
-            flights?: Array<{
-                airline?: string
-                departure_airport?: { id?: string }
-                arrival_airport?: { id?: string }
-            }>
-        }>
-        other_flights?: Array<{
-            price?: number
-            flights?: Array<{
-                airline?: string
-                departure_airport?: { id?: string }
-                arrival_airport?: { id?: string }
-            }>
-        }>
-    }
-
-    const raw = [...(data.best_flights ?? []), ...(data.other_flights ?? [])].slice(0, 8)
-
-    return raw.map((item) => {
-        const leg = item.flights?.[0]
-        const airline = leg?.airline ?? "Unknown Airline"
-        const from = leg?.departure_airport?.id ?? params.departureId
-        const to = leg?.arrival_airport?.id ?? params.arrivalId
-
-        return {
-            airline,
-            route: `${from} → ${to}`,
-            price: item.price ?? 0,
-            source: "serpapi" as const
-        }
-    })
-}
-
-/**
  * Draw selected route polylines on top of the map using the underlying Maps JS Polyline.
  * @vis.gl/react-google-maps gives us the map instance via useMap()
  */
@@ -467,8 +420,6 @@ export default function TripAdd() {
 
     const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
     const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined
-    const serpApiKey = import.meta.env.VITE_SERPAPI_KEY as string | undefined
-
     const [activeStep, setActiveStep] = useState(0)
     const [tripName, setTripName] = useState("")
     const [startDate, setStartDate] = useState("")
@@ -482,6 +433,12 @@ export default function TripAdd() {
     const [flights, setFlights] = useState<FlightOption[]>([])
     const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined)
     const [flightLoading, setFlightLoading] = useState(false)
+    const [transportOriginInput, setTransportOriginInput] = useState("")
+    const [transportDestinationInput, setTransportDestinationInput] = useState("")
+    const [originAirport, setOriginAirport] = useState<ResolvedAirport | null>(null)
+    const [destinationAirport, setDestinationAirport] = useState<ResolvedAirport | null>(null)
+    const [transportPlan, setTransportPlan] = useState<TransportPlanResponse | null>(null)
+    const [transportError, setTransportError] = useState<string | null>(null)
 
     const [accommodations] = useState<StayOption[]>(fakeStays)
     const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
@@ -560,6 +517,12 @@ export default function TripAdd() {
         setNavigationPlans(plans)
     }, [routeOptionsByLeg, routesByLeg, selectedRouteByLeg])
 
+    useEffect(() => {
+        if (destinations.length > 0 && !transportDestinationInput) {
+            setTransportDestinationInput(destinations[0])
+        }
+    }, [destinations, transportDestinationInput])
+
     function addDestination() {
         const value = destinationInput.trim()
         if (!value) return
@@ -578,39 +541,58 @@ export default function TripAdd() {
     }
 
     async function fetchFlights() {
-        if (!startDate || !endDate || destinations.length === 0) return
+        if (!startDate || !endDate || !transportOriginInput.trim() || !transportDestinationInput.trim()) return
 
         setFlightLoading(true)
+        setTransportError(null)
         try {
-            // If no SerpApi key, use your mock fallback
-            if (!serpApiKey) {
-                setFlights([
-                    { airline: "Sample Air", route: `NYC → ${destinations[0]}`, price: 640, source: "mock" },
-                    { airline: "Skyline", route: `NYC → ${destinations[0]}`, price: 780, source: "mock" }
-                ])
-                return
-            }
-
-            // SerpApi prefers IATA codes. If users type city names, this may return weak/empty results
-            // You can upgrade later by using autocomplete that stores metro/airport codes
-            const results = await fetchFlightsSerpApi({
-                serpApiKey,
-                departureId: "NYC",
-                arrivalId: destinations[0],
+            const result = await getTransportPlan({
+                origin: transportOriginInput,
+                destination: transportDestinationInput,
                 outboundDate: startDate,
                 returnDate: endDate
             })
 
+            setTransportPlan(result)
+            setOriginAirport(result.origin)
+            setDestinationAirport(result.destination)
+
+            const results: FlightOption[] = result.recommendations.map((option) => {
+                const firstSegment = option.segments[0]
+                return {
+                    airline: option.title,
+                    route: firstSegment?.summary ?? `${result.origin.airport.code} → ${result.destination.airport.code}`,
+                    price: option.totalPriceUsd ?? 0,
+                    source: "serpapi"
+                }
+            })
+
             if (results.length === 0) {
-                setFlights([{ airline: "Fallback Flights", route: `NYC → ${destinations[0]}`, price: 690, source: "mock" }])
+                setFlights([{ airline: "No recommendation found", route: `${transportOriginInput} → ${transportDestinationInput}`, price: 0, source: "mock" }])
                 return
             }
 
             setFlights(results)
         } catch {
-            setFlights([{ airline: "Fallback Flights", route: `NYC → ${destinations[0]}`, price: 690, source: "mock" }])
+            setTransportPlan(null)
+            setTransportError("Unable to build transportation plan. Ensure backend is running and SERP_API_KEY is set in backend .env.")
+            setFlights([{ airline: "Fallback", route: `${transportOriginInput} → ${transportDestinationInput}`, price: 0, source: "mock" }])
         } finally {
             setFlightLoading(false)
+        }
+    }
+
+    async function resolveAirportInput(which: "origin" | "destination") {
+        const value = which === "origin" ? transportOriginInput : transportDestinationInput
+        if (!value.trim()) return
+
+        try {
+            setTransportError(null)
+            const resolved = await resolveAirport(value)
+            if (which === "origin") setOriginAirport(resolved)
+            else setDestinationAirport(resolved)
+        } catch {
+            setTransportError(`Could not resolve ${which} to an airport.`)
         }
     }
 
@@ -1108,19 +1090,83 @@ export default function TripAdd() {
                                 {/* Flights */}
                                 {transportMode === "flight" && (
                                     <>
+                                        <TextField
+                                            label="Origin (city or airport code)"
+                                            value={transportOriginInput}
+                                            onChange={(e) => setTransportOriginInput(e.target.value)}
+                                            onBlur={() => void resolveAirportInput("origin")}
+                                            placeholder="e.g. Philadelphia or PHL"
+                                        />
+                                        <TextField
+                                            label="Destination (city or airport code)"
+                                            value={transportDestinationInput}
+                                            onChange={(e) => setTransportDestinationInput(e.target.value)}
+                                            onBlur={() => void resolveAirportInput("destination")}
+                                            placeholder="e.g. Paris or CDG"
+                                        />
+
+                                        <Stack direction="row" spacing={1}>
+                                            <Button variant="outlined" onClick={() => void resolveAirportInput("origin")}>Resolve origin airport</Button>
+                                            <Button variant="outlined" onClick={() => void resolveAirportInput("destination")}>Resolve destination airport</Button>
+                                        </Stack>
+
                                         <Button
                                             variant="outlined"
                                             onClick={fetchFlights}
-                                            disabled={flightLoading || destinations.length === 0}
+                                            disabled={flightLoading || !startDate || !endDate || !transportOriginInput || !transportDestinationInput}
                                         >
-                                            {flightLoading ? "Loading flights..." : "Fetch flights (SerpApi Google Flights)"}
+                                            {flightLoading ? "Loading transport plan..." : "Get optimized multimodal plan"}
                                         </Button>
 
-                                        {!serpApiKey && (
-                                            <Alert severity="info">
-                                                VITE_SERPAPI_KEY not set, showing mock flights. Add your SerpApi key to enable real results.
-                                            </Alert>
+                                        {transportError && <Alert severity="error">{transportError}</Alert>}
+
+                                        {(originAirport || destinationAirport) && (
+                                            <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Resolved Airports</Typography>
+                                                <Typography variant="body2">Origin: {originAirport ? `${originAirport.airport.name} (${originAirport.airport.code})` : "Not resolved"}</Typography>
+                                                <Typography variant="body2">Destination: {destinationAirport ? `${destinationAirport.airport.name} (${destinationAirport.airport.code})` : "Not resolved"}</Typography>
+                                            </Paper>
                                         )}
+
+                                        {mapsApiKey && (originAirport || destinationAirport) && (
+                                            <APIProvider apiKey={mapsApiKey}>
+                                                <Box sx={{ height: 280, borderRadius: 3, overflow: "hidden", border: "1px solid rgba(47,65,86,0.12)" }}>
+                                                    <Map
+                                                        center={originAirport ? { lat: originAirport.airport.lat, lng: originAirport.airport.lng } : { lat: destinationAirport!.airport.lat, lng: destinationAirport!.airport.lng }}
+                                                        defaultZoom={4}
+                                                        mapId={mapId}
+                                                        style={{ width: "100%", height: "100%" }}
+                                                        mapTypeControl={false}
+                                                        streetViewControl={false}
+                                                        fullscreenControl={false}
+                                                    >
+                                                        {originAirport && (
+                                                            <AdvancedMarker position={{ lat: originAirport.airport.lat, lng: originAirport.airport.lng }}>
+                                                                <Pin background="#2E7D32" glyphColor="#fff" borderColor="#1B5E20" />
+                                                            </AdvancedMarker>
+                                                        )}
+                                                        {destinationAirport && (
+                                                            <AdvancedMarker position={{ lat: destinationAirport.airport.lat, lng: destinationAirport.airport.lng }}>
+                                                                <Pin background="#1565C0" glyphColor="#fff" borderColor="#0D47A1" />
+                                                            </AdvancedMarker>
+                                                        )}
+                                                    </Map>
+                                                </Box>
+                                            </APIProvider>
+                                        )}
+
+                                        {transportPlan?.recommendations?.length ? (
+                                            <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Ranked multimodal recommendations</Typography>
+                                                <Stack spacing={1}>
+                                                    {transportPlan.recommendations.map((option) => (
+                                                        <Typography key={`${option.title}-${option.score}`} variant="body2" color="text.secondary">
+                                                            {option.title}: {toDuration(option.totalDurationMinutes)} • ${option.totalPriceUsd ?? "—"}
+                                                        </Typography>
+                                                    ))}
+                                                </Stack>
+                                            </Paper>
+                                        ) : null}
 
                                         <Stack spacing={1}>
                                             {flights.map((flight) => (
