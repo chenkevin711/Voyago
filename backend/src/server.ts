@@ -4,21 +4,22 @@ import { connectToDatabase, closeDatabaseConnection } from './config/database'
 import authRouter from './routes/auth'
 import cookieParser from "cookie-parser";
 import tripsRouter from "./routes/trips";
+import transportRouter from "./routes/transport";
 
 const app = express()
 
 app.get("/ping", (req, res) => res.status(200).send("pong"));
 
 // Middleware
-// Middleware
 app.use(cors({
-  origin: "http://localhost:5173", // frontend dev server
-  credentials: true
+    origin: "http://localhost:5173", // frontend dev server
+    credentials: true
 }));
 
 app.use(express.json())
 app.use(cookieParser());
 app.use("/api/trips", tripsRouter);
+app.use("/api/transport", transportRouter);
 // Mount auth routes
 app.use('/api/auth', authRouter)
 
