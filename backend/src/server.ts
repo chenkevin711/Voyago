@@ -4,6 +4,7 @@ import { connectToDatabase, closeDatabaseConnection } from './config/database'
 import authRouter from './routes/auth'
 import cookieParser from "cookie-parser";
 import tripsRouter from "./routes/trips";
+import transportRouter from "./routes/transport";
 
 const app = express()
 
@@ -19,6 +20,7 @@ app.use(cors({
 app.use(express.json())
 app.use(cookieParser());
 app.use("/api/trips", tripsRouter);
+app.use("/api/transport", transportRouter);
 // Mount auth routes
 app.use('/api/auth', authRouter)
 
