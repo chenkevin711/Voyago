@@ -1,8 +1,9 @@
+/**
+ * TypeScript Types
+ */
+
 import { ObjectId } from "mongodb";
 
-/**
- * Interface for users in the users collection
- */
 export interface User {
   _id?: ObjectId;
   username: string;
@@ -12,17 +13,33 @@ export interface User {
   role?: "admin" | "moderator" | "user";
 }
 
-/**
- * Request body for login endpoint
- */
+export interface PublicUser {
+  id: string;
+  username: string;
+  profile_picture_url?: string;
+}
+
+export type RelationStatus = "pending" | "accepted" | "blocked";
+
+export interface Relation {
+  _id?: ObjectId;
+  /**
+   * For pending/accepted: the user who initiated the request.
+   * For blocked: the user who issued the block.
+   */
+  user1_id: ObjectId;
+  user2_id: ObjectId;
+  status: RelationStatus;
+  created_at: Date;
+  updated_at: Date;
+}
+
+// Auth request / response shapes
 export interface LoginRequest {
   email: string;
   password: string;
 }
 
-/**
- * Response data for successful login
- */
 export interface LoginResponse {
   success: boolean;
   message: string;
@@ -34,18 +51,12 @@ export interface LoginResponse {
   token?: string;
 }
 
-/**
- * Request body for register endpoint
- */
 export interface RegisterRequest {
   email: string;
   username: string;
   password: string;
 }
 
-/**
- * Response data for successful account creation
- */
 export interface RegisterResponse {
   success: boolean;
   message: string;
@@ -58,6 +69,17 @@ export interface RegisterResponse {
   token?: string;
 }
 
+/** Generic response for relation mutation endpoints (request, accept, block, …) */
+export interface RelationActionResponse {
+  success: boolean;
+  message: string;
+}
+
+/** Response for list endpoints (friends, pending, blocked) */
+export interface RelationsResponse {
+  success: boolean;
+  message: string;
+  users?: PublicUser[];
 // ===== Trips / Budget Types =====
 
 export type BudgetCategory = {
