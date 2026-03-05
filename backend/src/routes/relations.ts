@@ -418,6 +418,90 @@ router.get("/pending", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/relations/sent
+ *
+ * Get all pending friend requests sent by the current user (awaiting response).
+ */
+router.get("/sent", async (req: Request, res: Response) => {
+  try {
+    const currentUser = await getUserFromReq(req);
+    if (!currentUser) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const relationsCollection = getCollection<Relation>("relations");
+    const usersCollection = getCollection<User>("users");
+
+    const sent = await relationsCollection
+      .find({ user1_id: currentUser._id, status: "pending" })
+      .toArray();
+
+    const recipientIds = sent.map((r) => r.user2_id);
+
+    const recipients = await usersCollection
+      .find({ _id: { $in: recipientIds } })
+      .project({ password_hash: 0 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      message: "Sent requests retrieved",
+      users: recipients.map((u) => ({
+        id: u._id!.toString(),
+        username: u.username,
+        profile_picture_url: u.profile_picture_url,
+      })),
+    } as RelationsResponse);
+  } catch (error) {
+    console.error("Get sent requests error:", error);
+    res.status(500).json({ success: false, message: "An error occurred" });
+  }
+});
+
+/**
+ * DELETE /api/relations/cancel/:targetUserId
+ *
+ * Cancel a pending friend request that the current user sent.
+ */
+router.delete("/cancel/:targetUserId", async (req: Request, res: Response) => {
+  try {
+    const currentUser = await getUserFromReq(req);
+    if (!currentUser) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const targetId = parseId(req.params.targetUserId);
+    if (!targetId) {
+      res.status(400).json({ success: false, message: "Invalid user id" });
+      return;
+    }
+
+    const relationsCollection = getCollection<Relation>("relations");
+
+    const result = await relationsCollection.deleteOne({
+      user1_id: currentUser._id,
+      user2_id: targetId,
+      status: "pending",
+    });
+
+    if (result.deletedCount === 0) {
+      res.status(404).json({ success: false, message: "No sent request found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Friend request cancelled",
+    } as RelationActionResponse);
+  } catch (error) {
+    console.error("Cancel friend request error:", error);
+    res.status(500).json({ success: false, message: "An error occurred" });
+  }
+});
+
+/**
  * GET /api/relations/blocked
  *
  * Get the list of users blocked by the current user.
