@@ -80,4 +80,90 @@ export interface RelationsResponse {
   success: boolean;
   message: string;
   users?: PublicUser[];
+// ===== Trips / Budget Types =====
+
+export type BudgetCategory = {
+  name: string;
+  planned: number;
+};
+
+export type Expense = {
+  _id: ObjectId;
+  name: string;
+  category?: string;
+  amount: number;
+  date: string; // ISO string
+  notes?: string;
+};
+
+export type Budget = {
+  currency: string; // e.g. "USD"
+  method: "total" | "perDay" | "categories";
+  totalBudget?: number; // if method="total"
+  dailyBudget?: number; // if method="perDay"
+  categories?: BudgetCategory[]; // if method="categories"
+  expenses?: Expense[];
+  computed?: {
+    plannedTotal: number;
+    actualTotal: number;
+    remaining: number;
+    tripDays: number;
+    perDayPlanned: number;
+  };
+  updatedAt: string;
+};
+
+// ===== Itinerary Types =====
+
+export type ItineraryAttraction = {
+  name: string;
+  price: number;
+  location?: string;
+};
+
+export type ItineraryEvent = {
+  id: string; // frontend-friendly id (uuid)
+  dayIndex: number; // which day this event belongs to
+  startTime?: string; // "09:00"
+  endTime?: string; // "10:30"
+  title: string;
+  description?: string;
+  location?: string;
+  cost?: number;
+};
+
+export type ItineraryDay = {
+  label: string; // "Day 1"
+  items: string[]; // attraction names (or ids later)
+};
+
+export type Itinerary = {
+  selectedAttractions: ItineraryAttraction[];
+  events?: ItineraryEvent[];
+  days?: ItineraryDay[];
+  updatedAt: string;
+};
+
+// ===== Trip Type (THIS IS WHAT YOU WERE MISSING) =====
+
+export interface Trip {
+  _id?: ObjectId;
+  userId: ObjectId;
+
+  title: string;
+
+  // keep your current backend field, and optionally support multiple destinations too
+  destination: string;
+  destinations?: string[];
+
+  startDate: string;
+  endDate: string;
+
+  notes?: string;
+
+  budget?: Budget;
+  itinerary?: Itinerary;
+
+  createdAt: string;
+  updatedAt: string;
 }
