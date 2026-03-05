@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import { ObjectId } from "mongodb";
 import { getCollection } from "../config/database";
 import { authorize } from "../middleware/authorize";
-import { tokenStorage } from "../routes/auth";
+import { getSession } from "../sessionStore";
 import { User, Relation, RelationStatus, RelationsResponse, RelationActionResponse } from "../types";
 
 const router: Router = express.Router();
@@ -20,14 +20,15 @@ function parseId(param: string | string[]): ObjectId | null {
 }
 
 /**
- * Helper: resolve username from token cookie to a User document
+ * Helper: resolve the current user's ObjectId directly from their session token.
+ * No DB round-trip needed — userId is stored in the session at login.
  */
-async function getUserFromReq(req: Request): Promise<User | null> {
+function getCurrentUserId(req: Request): ObjectId | null {
   const token = req.cookies?.token;
-  const username = tokenStorage[token];
-  if (!username) return null;
-  const usersCollection = getCollection<User>("users");
-  return usersCollection.findOne({ username });
+  if (!token) return null;
+  const session = getSession(token);
+  if (!session?.userId) return null;
+  return parseId(session.userId);
 }
 
 /**
@@ -38,8 +39,8 @@ async function getUserFromReq(req: Request): Promise<User | null> {
  */
 router.post("/request/:targetUserId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -50,7 +51,7 @@ router.post("/request/:targetUserId", async (req: Request, res: Response) => {
       return;
     }
 
-    if (currentUser._id!.equals(targetId)) {
+    if (currentUserId.equals(targetId)) {
       res.status(400).json({ success: false, message: "Cannot send a friend request to yourself" });
       return;
     }
@@ -67,8 +68,8 @@ router.post("/request/:targetUserId", async (req: Request, res: Response) => {
     // Check if any relation already exists between these two users
     const existing = await relationsCollection.findOne({
       $or: [
-        { user1_id: currentUser._id, user2_id: targetId },
-        { user1_id: targetId, user2_id: currentUser._id },
+        { user1_id: currentUserId, user2_id: targetId },
+        { user1_id: targetId, user2_id: currentUserId },
       ],
     });
 
@@ -83,7 +84,7 @@ router.post("/request/:targetUserId", async (req: Request, res: Response) => {
     }
 
     await relationsCollection.insertOne({
-      user1_id: currentUser._id!,
+      user1_id: currentUserId,
       user2_id: targetId,
       status: "pending",
       created_at: new Date(),
@@ -108,8 +109,8 @@ router.post("/request/:targetUserId", async (req: Request, res: Response) => {
  */
 router.post("/accept/:requesterId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -119,11 +120,12 @@ router.post("/accept/:requesterId", async (req: Request, res: Response) => {
       res.status(400).json({ success: false, message: "Invalid user id" });
       return;
     }
+
     const relationsCollection = getCollection<Relation>("relations");
 
     const relation = await relationsCollection.findOne({
       user1_id: requesterId,
-      user2_id: currentUser._id,
+      user2_id: currentUserId,
       status: "pending",
     });
 
@@ -154,8 +156,8 @@ router.post("/accept/:requesterId", async (req: Request, res: Response) => {
  */
 router.post("/decline/:requesterId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -165,11 +167,12 @@ router.post("/decline/:requesterId", async (req: Request, res: Response) => {
       res.status(400).json({ success: false, message: "Invalid user id" });
       return;
     }
+
     const relationsCollection = getCollection<Relation>("relations");
 
     const result = await relationsCollection.deleteOne({
       user1_id: requesterId,
-      user2_id: currentUser._id,
+      user2_id: currentUserId,
       status: "pending",
     });
 
@@ -189,14 +192,56 @@ router.post("/decline/:requesterId", async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/relations/cancel/:targetUserId
+ *
+ * Cancel a pending friend request that the current user sent.
+ */
+router.delete("/cancel/:targetUserId", async (req: Request, res: Response) => {
+  try {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const targetId = parseId(req.params.targetUserId);
+    if (!targetId) {
+      res.status(400).json({ success: false, message: "Invalid user id" });
+      return;
+    }
+
+    const relationsCollection = getCollection<Relation>("relations");
+
+    const result = await relationsCollection.deleteOne({
+      user1_id: currentUserId,
+      user2_id: targetId,
+      status: "pending",
+    });
+
+    if (result.deletedCount === 0) {
+      res.status(404).json({ success: false, message: "No sent request found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Friend request cancelled",
+    } as RelationActionResponse);
+  } catch (error) {
+    console.error("Cancel friend request error:", error);
+    res.status(500).json({ success: false, message: "An error occurred" });
+  }
+});
+
+/**
  * DELETE /api/relations/unfriend/:friendId
  *
  * Remove an accepted friendship between current user and friendId.
  */
 router.delete("/unfriend/:friendId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -206,12 +251,13 @@ router.delete("/unfriend/:friendId", async (req: Request, res: Response) => {
       res.status(400).json({ success: false, message: "Invalid user id" });
       return;
     }
+
     const relationsCollection = getCollection<Relation>("relations");
 
     const result = await relationsCollection.deleteOne({
       $or: [
-        { user1_id: currentUser._id, user2_id: friendId },
-        { user1_id: friendId, user2_id: currentUser._id },
+        { user1_id: currentUserId, user2_id: friendId },
+        { user1_id: friendId, user2_id: currentUserId },
       ],
       status: "accepted",
     });
@@ -239,8 +285,8 @@ router.delete("/unfriend/:friendId", async (req: Request, res: Response) => {
  */
 router.post("/block/:targetUserId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -251,7 +297,7 @@ router.post("/block/:targetUserId", async (req: Request, res: Response) => {
       return;
     }
 
-    if (currentUser._id!.equals(targetId)) {
+    if (currentUserId.equals(targetId)) {
       res.status(400).json({ success: false, message: "Cannot block yourself" });
       return;
     }
@@ -261,13 +307,13 @@ router.post("/block/:targetUserId", async (req: Request, res: Response) => {
     // Remove any existing relation first, then insert a block owned by the blocker
     await relationsCollection.deleteOne({
       $or: [
-        { user1_id: currentUser._id, user2_id: targetId },
-        { user1_id: targetId, user2_id: currentUser._id },
+        { user1_id: currentUserId, user2_id: targetId },
+        { user1_id: targetId, user2_id: currentUserId },
       ],
     });
 
     await relationsCollection.insertOne({
-      user1_id: currentUser._id!,
+      user1_id: currentUserId,
       user2_id: targetId,
       status: "blocked",
       created_at: new Date(),
@@ -291,8 +337,8 @@ router.post("/block/:targetUserId", async (req: Request, res: Response) => {
  */
 router.delete("/block/:targetUserId", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -302,10 +348,11 @@ router.delete("/block/:targetUserId", async (req: Request, res: Response) => {
       res.status(400).json({ success: false, message: "Invalid user id" });
       return;
     }
+
     const relationsCollection = getCollection<Relation>("relations");
 
     const result = await relationsCollection.deleteOne({
-      user1_id: currentUser._id,
+      user1_id: currentUserId,
       user2_id: targetId,
       status: "blocked",
     });
@@ -332,8 +379,8 @@ router.delete("/block/:targetUserId", async (req: Request, res: Response) => {
  */
 router.get("/friends", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -344,15 +391,15 @@ router.get("/friends", async (req: Request, res: Response) => {
     const relations = await relationsCollection
       .find({
         $or: [
-          { user1_id: currentUser._id },
-          { user2_id: currentUser._id },
+          { user1_id: currentUserId },
+          { user2_id: currentUserId },
         ],
         status: "accepted",
       })
       .toArray();
 
     const friendIds = relations.map((r) =>
-      r.user1_id.equals(currentUser._id!) ? r.user2_id : r.user1_id
+      r.user1_id.equals(currentUserId) ? r.user2_id : r.user1_id
     );
 
     const friends = await usersCollection
@@ -382,8 +429,8 @@ router.get("/friends", async (req: Request, res: Response) => {
  */
 router.get("/pending", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -392,7 +439,7 @@ router.get("/pending", async (req: Request, res: Response) => {
     const usersCollection = getCollection<User>("users");
 
     const pending = await relationsCollection
-      .find({ user2_id: currentUser._id, status: "pending" })
+      .find({ user2_id: currentUserId, status: "pending" })
       .toArray();
 
     const requesterIds = pending.map((r) => r.user1_id);
@@ -424,8 +471,8 @@ router.get("/pending", async (req: Request, res: Response) => {
  */
 router.get("/sent", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -434,7 +481,7 @@ router.get("/sent", async (req: Request, res: Response) => {
     const usersCollection = getCollection<User>("users");
 
     const sent = await relationsCollection
-      .find({ user1_id: currentUser._id, status: "pending" })
+      .find({ user1_id: currentUserId, status: "pending" })
       .toArray();
 
     const recipientIds = sent.map((r) => r.user2_id);
@@ -460,56 +507,14 @@ router.get("/sent", async (req: Request, res: Response) => {
 });
 
 /**
- * DELETE /api/relations/cancel/:targetUserId
- *
- * Cancel a pending friend request that the current user sent.
- */
-router.delete("/cancel/:targetUserId", async (req: Request, res: Response) => {
-  try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
-      res.status(401).json({ success: false, message: "Unauthorized" });
-      return;
-    }
-
-    const targetId = parseId(req.params.targetUserId);
-    if (!targetId) {
-      res.status(400).json({ success: false, message: "Invalid user id" });
-      return;
-    }
-
-    const relationsCollection = getCollection<Relation>("relations");
-
-    const result = await relationsCollection.deleteOne({
-      user1_id: currentUser._id,
-      user2_id: targetId,
-      status: "pending",
-    });
-
-    if (result.deletedCount === 0) {
-      res.status(404).json({ success: false, message: "No sent request found" });
-      return;
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Friend request cancelled",
-    } as RelationActionResponse);
-  } catch (error) {
-    console.error("Cancel friend request error:", error);
-    res.status(500).json({ success: false, message: "An error occurred" });
-  }
-});
-
-/**
  * GET /api/relations/blocked
  *
  * Get the list of users blocked by the current user.
  */
 router.get("/blocked", async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -518,7 +523,7 @@ router.get("/blocked", async (req: Request, res: Response) => {
     const usersCollection = getCollection<User>("users");
 
     const blocked = await relationsCollection
-      .find({ user1_id: currentUser._id, status: "blocked" })
+      .find({ user1_id: currentUserId, status: "blocked" })
       .toArray();
 
     const blockedIds = blocked.map((r) => r.user2_id);

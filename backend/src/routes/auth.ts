@@ -2,7 +2,7 @@ import express, { Request, Response, Router, CookieOptions } from "express";
 import argon2 from "argon2";
 import crypto from "crypto";
 import { getCollection } from "../config/database";
-import { setSession, deleteSession } from "../SessionStore";
+import { setSession, deleteSession } from "../sessionStore";
 import { User, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse } from "../types";
 
 const router: Router = express.Router();

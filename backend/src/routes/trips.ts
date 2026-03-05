@@ -2,7 +2,7 @@ import express, { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { connectToDatabase, getCollection } from "../config/database";
 import type { Trip, Budget, Itinerary } from "../types";
-import { getSession } from "../SessionStore";
+import { getSession } from "../sessionStore";
 
 const router = express.Router();
 

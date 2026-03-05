@@ -80,6 +80,8 @@ export interface RelationsResponse {
   success: boolean;
   message: string;
   users?: PublicUser[];
+}
+
 // ===== Trips / Budget Types =====
 
 export type BudgetCategory = {
