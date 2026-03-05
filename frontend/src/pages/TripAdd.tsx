@@ -160,6 +160,51 @@ function decodePolyline(encoded: string): Array<[number, number]> {
   return coordinates
 }
 
+/** -----------------------------
+ *  ✅ DATE VALIDATION HELPERS
+ *  ----------------------------- */
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function isValidISODate(value: string): boolean {
+  if (!value) return false
+  const d = new Date(value)
+  return !Number.isNaN(d.valueOf())
+}
+
+function validateTripDates(startDate: string, endDate: string): {
+  startError: string | null
+  endError: string | null
+} {
+  if (!startDate && !endDate) return { startError: null, endError: null }
+
+  const today = startOfDay(new Date())
+  let startError: string | null = null
+  let endError: string | null = null
+
+  if (startDate && !isValidISODate(startDate)) startError = "Invalid start date."
+  if (endDate && !isValidISODate(endDate)) endError = "Invalid end date."
+
+  if (startDate && isValidISODate(startDate)) {
+    const s = startOfDay(new Date(startDate))
+    if (s < today) startError = "Start date can’t be in the past."
+  }
+
+  if (startDate && endDate && isValidISODate(startDate) && isValidISODate(endDate)) {
+    const s = startOfDay(new Date(startDate))
+    const e = startOfDay(new Date(endDate))
+
+    if (e <= s) endError = "End date must be after the start date."
+
+    // optional cap so the UI doesn't get insane
+    const nights = tripNights(startDate, endDate)
+    if (nights > 60) endError = "Trip is too long (max 60 nights)."
+  }
+
+  return { startError, endError }
+}
+
 /**
  * Places API (New) Text Search
  * Resolves a user-entered destination string to a Place + lat/lng
@@ -484,7 +529,6 @@ export default function TripAdd() {
   const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
   const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
-  // NEW: saving state + error
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -500,12 +544,19 @@ export default function TripAdd() {
 
   const tripDates = formatDateRange(startDate, endDate)
 
+  /** ✅ NEW: validate dates */
+  const { startError, endError } = useMemo(
+    () => validateTripDates(startDate, endDate),
+    [startDate, endDate]
+  )
+  const datesValid = !startError && !endError && Boolean(startDate) && Boolean(endDate)
+
   const canContinue = useMemo(() => {
-    if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate)
+    if (activeStep === 0) return tripName.trim().length > 1 && datesValid
     if (activeStep === 1) return budgetInput.trim().length > 0 && budget > 0
     if (activeStep === 2) return destinations.length > 0
     return true
-  }, [activeStep, budget, budgetInput, destinations.length, endDate, startDate, tripName])
+  }, [activeStep, budget, budgetInput, destinations.length, datesValid, tripName])
 
   useEffect(() => {
     if (!mapsApiKey || destinations.length === 0) {
@@ -565,6 +616,7 @@ export default function TripAdd() {
 
   async function fetchFlights() {
     if (!startDate || !endDate || destinations.length === 0) return
+    if (!datesValid) return
 
     setFlightLoading(true)
     try {
@@ -843,7 +895,6 @@ export default function TripAdd() {
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
-  // ✅ UPDATED: use Mongo _id returned from backend
   async function saveTrip() {
     if (saving) return
     setSaving(true)
@@ -851,7 +902,7 @@ export default function TripAdd() {
 
     try {
       const plannedTrip: PlannedTrip = {
-        id: "", // backend ignores; returns Mongo _id
+        id: "",
         name: tripName,
         startDate,
         endDate,
@@ -879,6 +930,8 @@ export default function TripAdd() {
     }
   }
 
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), [])
+
   return (
     <AppLayout>
       <Page title="Create a Trip" subtitle="Plan step-by-step and save to your account.">
@@ -902,20 +955,33 @@ export default function TripAdd() {
                   onChange={(e) => setTripName(e.target.value)}
                   fullWidth
                 />
+
                 <TextField
                   label="Start date"
                   type="date"
                   InputLabelProps={{ shrink: true }}
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
+                  inputProps={{ min: todayISO }}
+                  error={Boolean(startError)}
+                  helperText={startError ?? " "}
                 />
+
                 <TextField
                   label="End date"
                   type="date"
                   InputLabelProps={{ shrink: true }}
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
+                  inputProps={{ min: startDate || todayISO }}
+                  error={Boolean(endError)}
+                  helperText={endError ?? " "}
                 />
+
+                {(startError || endError) && (
+                  <Alert severity="warning">{startError ?? endError}</Alert>
+                )}
+
                 <Typography color="text.secondary">Trip window: {tripDates}</Typography>
               </Stack>
             )}
@@ -977,6 +1043,8 @@ export default function TripAdd() {
                 )}
               </Stack>
             )}
+
+            {/* --- the rest of your steps (3/4/5) unchanged --- */}
 
             {activeStep === 3 && (
               <Stack spacing={2}>
@@ -1106,7 +1174,7 @@ export default function TripAdd() {
                     <Button
                       variant="outlined"
                       onClick={fetchFlights}
-                      disabled={flightLoading || destinations.length === 0}
+                      disabled={flightLoading || destinations.length === 0 || !datesValid}
                     >
                       {flightLoading ? "Loading flights..." : "Fetch flights (SerpApi Google Flights)"}
                     </Button>
@@ -1265,7 +1333,7 @@ export default function TripAdd() {
                 <Button
                   variant="contained"
                   onClick={saveTrip}
-                  disabled={saving || !tripName || destinations.length === 0}
+                  disabled={saving || !tripName || destinations.length === 0 || !datesValid}
                 >
                   {saving ? "Saving..." : "Save Trip"}
                 </Button>

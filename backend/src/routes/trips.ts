@@ -130,7 +130,36 @@ router.get("/:id", async (req: Request, res: Response) => {
     return res.status(401).json({ error: e.message ?? "Failed to fetch trip" });
   }
 });
+// PATCH /api/trips/:id  (update budget, etc.)
+router.patch("/:id", async (req: Request, res: Response) => {
+  try {
+    const userId = requireUserId(req);
+    const id = toObjectId(getParam(req, "id"));
 
+    const { budget } = req.body ?? {};
+    if (budget !== undefined && (typeof budget !== "number" || budget < 0)) {
+      return res.status(400).json({ error: "budget must be a non-negative number" });
+    }
+
+    const trips = getCollection("trips");
+
+    const update: any = {};
+    if (budget !== undefined) update.budget = budget;
+
+    const result = await trips.updateOne(
+      { _id: id, userId }, // enforce ownership
+      { $set: update }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Trip not found" });
+    }
+
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? "Failed to update trip" });
+  }
+});
 // PATCH trip (core fields)
 router.patch("/:id", async (req: Request, res: Response) => {
   try {

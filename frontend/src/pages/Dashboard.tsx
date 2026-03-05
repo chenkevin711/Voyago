@@ -19,7 +19,7 @@ import { formatDateRange } from "../tripPlanning";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
-const sampleTrips = [
+const initialSampleTrips = [
   { id: "paris2026", name: "Paris + London", dates: "Mar 12–20", members: 4 },
   { id: "tokyo", name: "Tokyo Food Trip", dates: "Apr 3–9", members: 2 },
   { id: "miami", name: "Miami Relax Week", dates: "May 1–6", members: 3 },
@@ -32,7 +32,7 @@ type DashboardTrip = {
   name: string;
   dates: string;
   members: number;
-  isSavedTrip?: boolean;
+  isSavedTrip?: boolean; // true => Mongo/DB trip
 };
 
 export default function Dashboard() {
@@ -40,6 +40,8 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState<SortKey>("name");
 
   const [storedTrips, setStoredTrips] = useState<DashboardTrip[]>([]);
+  const [sampleTrips, setSampleTrips] = useState<DashboardTrip[]>(initialSampleTrips);
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -52,7 +54,7 @@ export default function Dashboard() {
 
       try {
         const res = await axios.get(`${API_BASE}/api/trips`, {
-          withCredentials: true, // ✅ send cookies (token)
+          withCredentials: true,
         });
 
         if (cancelled) return;
@@ -61,7 +63,7 @@ export default function Dashboard() {
           id: t._id,
           name: t.title,
           dates: formatDateRange(t.startDate, t.endDate),
-          members: 1,
+          members: t.membersCount ?? 1, // safe default
           isSavedTrip: true,
         }));
 
@@ -69,12 +71,7 @@ export default function Dashboard() {
       } catch (e: any) {
         if (cancelled) return;
 
-        // backend returns { error: "Not logged in" } with 401
-        const msg =
-          e?.response?.data?.error ??
-          e?.message ??
-          "Failed to load trips";
-
+        const msg = e?.response?.data?.error ?? e?.message ?? "Failed to load trips";
         setLoadError(msg);
         setStoredTrips([]);
       } finally {
@@ -88,7 +85,7 @@ export default function Dashboard() {
     };
   }, []);
 
-  const trips = useMemo(() => [...storedTrips, ...sampleTrips], [storedTrips]);
+  const trips = useMemo(() => [...storedTrips, ...sampleTrips], [storedTrips, sampleTrips]);
 
   const filteredTrips = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -101,18 +98,21 @@ export default function Dashboard() {
   }, [query, sortBy, trips]);
 
   async function removeTrip(id: string) {
-    // sample trips: just remove from UI
+    setLoadError(null);
+
     const isMongoTrip = storedTrips.some((t) => t.id === id);
+
+    // Sample trips: remove from sample state
     if (!isMongoTrip) {
-      setStoredTrips((prev) => prev.filter((t) => t.id !== id));
+      setSampleTrips((prev) => prev.filter((t) => t.id !== id));
       return;
     }
 
+    // Mongo trips: call backend then remove from stored state
     try {
       await axios.delete(`${API_BASE}/api/trips/${id}`, {
-        withCredentials: true, // ✅ cookie auth
+        withCredentials: true,
       });
-
       setStoredTrips((prev) => prev.filter((t) => t.id !== id));
     } catch (e: any) {
       setLoadError(e?.response?.data?.error ?? e?.message ?? "Failed to delete trip");
