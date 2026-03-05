@@ -3,7 +3,6 @@ import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
-
 import TripAdd from "./pages/TripAdd";
 import TripOverview from "./pages/TripOverview";
 import Itinerary from "./pages/Itinerary";
@@ -11,6 +10,7 @@ import Flights from "./pages/Flights";
 import Budget from "./pages/Budget";
 import Chat from "./pages/Chat";
 import Profile from "./pages/Profile";
+import Friends from "./pages/Friends";
 import { CookiesProvider } from "react-cookie";
 
 function App() {
@@ -31,6 +31,7 @@ function App() {
             <Route path="/trips/:tripId/chat" element={<Chat />} />
 
             <Route path="/profile" element={<Profile />} />
+            <Route path="/friends" element={<Friends />} />
           </Routes>
         </BrowserRouter>
       </CookiesProvider>

@@ -17,7 +17,7 @@ import Page from "../components/Page";
 import TripCard from "./TripCard";
 import { formatDateRange } from "../tripPlanning";
 
-const API_BASE = "http://localhost:5001";
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
 const sampleTrips = [
   { id: "paris2026", name: "Paris + London", dates: "Mar 12–20", members: 4 },
@@ -28,16 +28,12 @@ const sampleTrips = [
 type SortKey = "name" | "members";
 
 type DashboardTrip = {
-  id: string; // Mongo _id (string)
+  id: string; // Mongo _id (string) OR sample id
   name: string;
   dates: string;
   members: number;
   isSavedTrip?: boolean;
 };
-
-function getUserId(): string | null {
-  return localStorage.getItem("userId");
-}
 
 export default function Dashboard() {
   const [query, setQuery] = useState("");
@@ -55,14 +51,8 @@ export default function Dashboard() {
       setLoadError(null);
 
       try {
-        const userId = getUserId();
-        if (!userId) {
-          setStoredTrips([]);
-          return;
-        }
-
         const res = await axios.get(`${API_BASE}/api/trips`, {
-          params: { userId },
+          withCredentials: true, // ✅ send cookies (token)
         });
 
         if (cancelled) return;
@@ -78,7 +68,15 @@ export default function Dashboard() {
         setStoredTrips(mapped);
       } catch (e: any) {
         if (cancelled) return;
-        setLoadError(e?.response?.data?.error ?? e?.message ?? "Failed to load trips");
+
+        // backend returns { error: "Not logged in" } with 401
+        const msg =
+          e?.response?.data?.error ??
+          e?.message ??
+          "Failed to load trips";
+
+        setLoadError(msg);
+        setStoredTrips([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -103,7 +101,7 @@ export default function Dashboard() {
   }, [query, sortBy, trips]);
 
   async function removeTrip(id: string) {
-    // If it's a sample trip, just remove from UI
+    // sample trips: just remove from UI
     const isMongoTrip = storedTrips.some((t) => t.id === id);
     if (!isMongoTrip) {
       setStoredTrips((prev) => prev.filter((t) => t.id !== id));
@@ -111,10 +109,10 @@ export default function Dashboard() {
     }
 
     try {
-      const userId = getUserId();
-      if (!userId) throw new Error("Missing userId");
+      await axios.delete(`${API_BASE}/api/trips/${id}`, {
+        withCredentials: true, // ✅ cookie auth
+      });
 
-      await axios.delete(`${API_BASE}/api/trips/${id}`, { data: { userId } });
       setStoredTrips((prev) => prev.filter((t) => t.id !== id));
     } catch (e: any) {
       setLoadError(e?.response?.data?.error ?? e?.message ?? "Failed to delete trip");

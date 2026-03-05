@@ -6,56 +6,64 @@ import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
 import { deletePlannedTrip, formatDateRange, getPlannedTripById, type PlannedTrip } from "../tripPlanning";
 
-function toCurrency(amount?: number, currency = "USD"): string {
-  const safe = Number.isFinite(amount as number) ? (amount as number) : 0;
-  return safe.toLocaleString(undefined, { style: "currency", currency });
+function toCurrency(amount: number): string {
+  return `$${amount.toLocaleString()}`;
 }
 
 export default function TripOverview() {
   const navigate = useNavigate();
   const { tripId } = useParams();
 
-  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
-  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
-
   const [trip, setTrip] = useState<PlannedTrip | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
+  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
+  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
   const [selected, setSelected] = useState<{ label: string; position: { lat: number; lng: number } } | null>(null);
 
   useEffect(() => {
-    let alive = true;
+    let cancelled = false;
 
     async function load() {
+      if (!tripId) {
+        setLoading(false);
+        setTrip(undefined);
+        return;
+      }
+
+      setLoading(true);
+      setLoadError(null);
+
       try {
-        setLoading(true);
-        if (!tripId) {
-          if (alive) setTrip(undefined);
-          return;
-        }
-        const t = await getPlannedTripById(tripId);
-        if (alive) setTrip(t);
+        const found = await getPlannedTripById(tripId);
+        if (cancelled) return;
+        setTrip(found);
+      } catch (e: any) {
+        if (cancelled) return;
+        setLoadError(e?.message ?? "Failed to load trip");
+        setTrip(undefined);
       } finally {
-        if (alive) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     load();
     return () => {
-      alive = false;
+      cancelled = true;
     };
   }, [tripId]);
 
   const points = useMemo(() => {
-    return (trip?.destinations ?? []).map((destination: string, index: number) => ({
+    return (trip?.destinations ?? []).map((destination, index) => ({
       label: destination,
       position: { lat: 38 + index * 4, lng: -3 + index * 8 },
     }));
-  }, [trip?.destinations]);
+  }, [trip]);
 
-  function removeTrip() {
+  async function removeTrip() {
     if (!tripId) return;
-    deletePlannedTrip(tripId);
+    await deletePlannedTrip(tripId);
     navigate("/dashboard");
   }
 
@@ -66,11 +74,11 @@ export default function TripOverview() {
         subtitle={
           trip
             ? `${formatDateRange(trip.startDate, trip.endDate)} • Budget ${toCurrency(trip.budget)}`
-            : tripId
-            ? `Trip: ${tripId}`
-            : "Trip not found"
+            : `Trip: ${tripId ?? ""}`
         }
       >
+        {loadError && <Alert severity="error" sx={{ mb: 2 }}>{loadError}</Alert>}
+
         {loading ? (
           <Alert severity="info">Loading trip…</Alert>
         ) : !trip ? (
@@ -80,7 +88,7 @@ export default function TripOverview() {
             <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
               <Stack spacing={1.5}>
                 <Stack direction="row" gap={1} flexWrap="wrap">
-                  {(trip.destinations ?? []).map((destination: string) => (
+                  {trip.destinations.map((destination) => (
                     <Chip key={destination} label={destination} variant="outlined" />
                   ))}
                 </Stack>
@@ -88,44 +96,6 @@ export default function TripOverview() {
                 <Typography variant="body2" color="text.secondary">
                   Estimated spend: {toCurrency(trip.estimatedTotal)}
                 </Typography>
-
-                {trip.selectedFlight && (
-                  <Typography variant="body2" color="text.secondary">
-                    Flight: {trip.selectedFlight.airline} ({toCurrency(trip.selectedFlight.price)})
-                  </Typography>
-                )}
-
-                {trip.selectedAccommodation && (
-                  <Typography variant="body2" color="text.secondary">
-                    Stay: {trip.selectedAccommodation.name} ({toCurrency(trip.selectedAccommodation.nightlyRate)}/night)
-                  </Typography>
-                )}
-
-                {(trip.selectedAttractions?.length ?? 0) > 0 && (
-                  <Typography variant="body2" color="text.secondary">
-                    Attractions: {trip.selectedAttractions.map((a) => a.name).join(", ")}
-                  </Typography>
-                )}
-
-                {(trip.navigationPlans?.length ?? 0) > 0 && (
-                  <Stack spacing={0.75}>
-                    <Typography variant="body2" color="text.secondary">
-                      Navigation routes:
-                    </Typography>
-                    {trip.navigationPlans.map((plan) => (
-                      <Button
-                        key={`${plan.origin}-${plan.destination}`}
-                        href={plan.mapsUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        size="small"
-                        sx={{ justifyContent: "flex-start", width: "fit-content", px: 0 }}
-                      >
-                        {plan.origin} → {plan.destination}
-                      </Button>
-                    ))}
-                  </Stack>
-                )}
               </Stack>
             </Paper>
 
@@ -165,14 +135,8 @@ export default function TripOverview() {
               <Button component={RouterLink} to={`/trips/${tripId}/itinerary`} variant="contained">
                 Itinerary
               </Button>
-              <Button component={RouterLink} to={`/trips/${tripId}/flights`} variant="outlined">
-                Flights & Hotels
-              </Button>
               <Button component={RouterLink} to={`/trips/${tripId}/budget`} variant="outlined">
                 Budget
-              </Button>
-              <Button component={RouterLink} to={`/trips/${tripId}/chat`} variant="outlined">
-                Chat
               </Button>
               <Button color="error" variant="text" onClick={removeTrip}>
                 Delete Trip

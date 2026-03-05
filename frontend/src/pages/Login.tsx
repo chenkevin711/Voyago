@@ -2,70 +2,58 @@ import { Box, Button, Container, TextField, Typography, Paper } from "@mui/mater
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import axios from "axios";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { getAxiosErrorMessages } from "../utils";
-import { useCookies } from "react-cookie";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
 export default function Login() {
   const [messages, setMessages] = useState<string[]>([]);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-  });
-  const navigate = useNavigate();
-  const [cookies] = useCookies(["loggedIn"]);
+  const [formData, setFormData] = useState({ email: "", password: "" });
+  const [submitting, setSubmitting] = useState(false);
 
-  // Return user to homepage if they are logged in.
-  useEffect(() => {
-    if (cookies.loggedIn) {
-      setTimeout(() => navigate("/"), 0);
-    }
-  }, [cookies.loggedIn, navigate]);
+  const navigate = useNavigate();
 
   const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
     setMessages([]);
     setIsSuccess(false);
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       [event.target.id]: event.target.value,
-    });
+    }));
   };
 
   const handleSubmit = async (event: React.SyntheticEvent) => {
     event.preventDefault();
+    setMessages([]);
     setIsSuccess(false);
+    setSubmitting(true);
 
     try {
-      const { status, data } = await axios({
-        method: "post",
-        url: `${API_BASE}/api/auth/login`,
-        data: formData,
-        withCredentials: true, // ✅ allow cookies
-      });
+      const res = await axios.post(
+        `${API_BASE}/api/auth/login`,
+        formData,
+        { withCredentials: true } // ✅ send/receive cookies
+      );
 
-      if (status !== 200) {
-        setMessages([data?.message ?? "Request failed"]);
-        return;
-      }
-
-      // ✅ save userId so itinerary/trips can use it
-      if (data?.user?.id) {
-        localStorage.setItem("userId", data.user.id);
+      // ✅ store userId (optional, but your UI uses it in a couple places)
+      if (res.data?.user?.id) {
+        localStorage.setItem("userId", res.data.user.id);
       }
 
       setIsSuccess(true);
       setMessages(["Login successful!"]);
       setFormData({ email: "", password: "" });
 
-      // ✅ navigate after login
-      setTimeout(() => navigate("/"), 500);
+      // ✅ go to dashboard (or "/" if that’s your dashboard)
+      navigate("/dashboard");
     } catch (error) {
       console.error(error);
       setMessages(getAxiosErrorMessages(error));
       setIsSuccess(false);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -82,9 +70,27 @@ export default function Login() {
           </Typography>
 
           <Box component="form" onSubmit={handleSubmit} sx={{ display: "grid", gap: 2 }}>
-            <TextField label="Email" id="email" fullWidth value={formData.email} onChange={handleChange} />
-            <TextField label="Password" id="password" type="password" fullWidth value={formData.password} onChange={handleChange} />
-            <Button type="submit" variant="contained" size="large">Log In</Button>
+            <TextField
+              label="Email"
+              id="email"
+              fullWidth
+              value={formData.email}
+              onChange={handleChange}
+              autoComplete="email"
+            />
+            <TextField
+              label="Password"
+              id="password"
+              type="password"
+              fullWidth
+              value={formData.password}
+              onChange={handleChange}
+              autoComplete="current-password"
+            />
+
+            <Button type="submit" variant="contained" size="large" disabled={submitting}>
+              {submitting ? "Logging in..." : "Log In"}
+            </Button>
 
             {messages.length > 0 && (
               <Box
@@ -96,7 +102,9 @@ export default function Login() {
                 }}
               >
                 {messages.map((message, index) => (
-                  <Typography key={index} variant="body2">{message}</Typography>
+                  <Typography key={index} variant="body2">
+                    {message}
+                  </Typography>
                 ))}
               </Box>
             )}
@@ -104,7 +112,11 @@ export default function Login() {
 
           <Typography sx={{ mt: 3, color: "text.secondary" }}>
             Don’t have an account?{" "}
-            <Typography component={RouterLink} to="/signup" sx={{ color: "primary.main", textDecoration: "none", fontWeight: 600 }}>
+            <Typography
+              component={RouterLink}
+              to="/signup"
+              sx={{ color: "primary.main", textDecoration: "none", fontWeight: 600 }}
+            >
               Sign up
             </Typography>
           </Typography>
