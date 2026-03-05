@@ -336,6 +336,26 @@ function RouteOverlay(props: {
     return null
 }
 
+function FitMapToPoints(props: { points: Array<{ lat: number; lng: number }>; singlePointZoom?: number }) {
+    const map = useMap()
+
+    useEffect(() => {
+        if (!map || !window.google?.maps || props.points.length === 0) return
+
+        if (props.points.length === 1) {
+            map.panTo(props.points[0])
+            map.setZoom(props.singlePointZoom ?? 8)
+            return
+        }
+
+        const bounds = new window.google.maps.LatLngBounds()
+        props.points.forEach((point) => bounds.extend(point))
+        map.fitBounds(bounds, 64)
+    }, [map, props.points, props.singlePointZoom])
+
+    return null
+}
+
 function TripRouteMap(props: {
     loading: boolean
     places: ResolvedPlace[]
@@ -409,7 +429,43 @@ function TripRouteMap(props: {
                     </InfoWindow>
                 )}
 
+                <FitMapToPoints points={props.places.map((place) => place.location)} />
                 <RouteOverlay legs={props.legs} selectedRouteByLeg={props.selectedRouteByLeg} />
+            </Map>
+        </Box>
+    )
+}
+
+function AirportPinsMap(props: {
+    originAirport: ResolvedAirport | null
+    destinationAirport: ResolvedAirport | null
+    mapId?: string
+}) {
+    const points = [props.originAirport?.airport, props.destinationAirport?.airport]
+        .flatMap((airport) => (airport ? [{ lat: airport.lat, lng: airport.lng }] : []))
+
+    return (
+        <Box sx={{ height: 280, borderRadius: 3, overflow: "hidden", border: "1px solid rgba(47,65,86,0.12)" }}>
+            <Map
+                defaultCenter={points[0] ?? { lat: 39.5, lng: -98.35 }}
+                defaultZoom={4}
+                mapId={props.mapId}
+                style={{ width: "100%", height: "100%" }}
+                mapTypeControl={false}
+                streetViewControl={false}
+                fullscreenControl={false}
+            >
+                {props.originAirport && (
+                    <AdvancedMarker position={{ lat: props.originAirport.airport.lat, lng: props.originAirport.airport.lng }}>
+                        <Pin background="#2E7D32" glyphColor="#fff" borderColor="#1B5E20" />
+                    </AdvancedMarker>
+                )}
+                {props.destinationAirport && (
+                    <AdvancedMarker position={{ lat: props.destinationAirport.airport.lat, lng: props.destinationAirport.airport.lng }}>
+                        <Pin background="#1565C0" glyphColor="#fff" borderColor="#0D47A1" />
+                    </AdvancedMarker>
+                )}
+                <FitMapToPoints points={points} singlePointZoom={5} />
             </Map>
         </Box>
     )
@@ -449,7 +505,6 @@ export default function TripAdd() {
 
     // Kept for your existing UI, but we now also show route options on the map
     const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
-    const [navigationLoading, setNavigationLoading] = useState(false)
     const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
 
     // New: resolved places + route alternatives for the map
@@ -522,6 +577,13 @@ export default function TripAdd() {
             setTransportDestinationInput(destinations[0])
         }
     }, [destinations, transportDestinationInput])
+
+    useEffect(() => {
+        if (activeStep !== 3) return
+        if (!mapsApiKey || destinations.length < 2) return
+
+        void buildRoutes()
+    }, [activeStep, destinations, mapsApiKey, transportMode])
 
     function addDestination() {
         const value = destinationInput.trim()
@@ -718,49 +780,6 @@ export default function TripAdd() {
             setNavigationPlans(plans)
         } finally {
             setRoutesLoading(false)
-        }
-    }
-
-    async function buildNavigationPlans() {
-        if (destinations.length < 2) return
-        if (Object.keys(routeOptionsByLeg).length > 0) {
-            const plans: NavigationPlan[] = Object.entries(routeOptionsByLeg).flatMap(([legIdx, options]) => {
-                const leg = routesByLeg[Number(legIdx)]
-                const selectedOption = options[selectedRouteByLeg[Number(legIdx)] ?? 0]
-                if (!leg || !selectedOption) return []
-                return [{
-                    origin: leg.origin,
-                    destination: leg.destination,
-                    method: selectedOption.mode,
-                    estimatedCost: selectedOption.estimatedCost,
-                    estimatedDuration: selectedOption.duration,
-                    mapsUrl: selectedOption.mapsUrl,
-                    source: selectedOption.source === "google_routes" ? "google_places" : "mock"
-                }]
-            })
-            setNavigationPlans(plans)
-            return
-        }
-
-        setNavigationLoading(true)
-        try {
-            const fallbackPlans: NavigationPlan[] = destinations.slice(0, -1).map((origin, index) => {
-                const destination = destinations[index + 1]
-                const mode: "driving" | "transit" = transportMode === "train" ? "transit" : "driving"
-                return {
-                    origin,
-                    destination,
-                    method: mode,
-                    estimatedCost: mode === "driving" ? 18 : 9,
-                    estimatedDuration: "Unknown",
-                    mapsUrl: `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=${mode}`,
-                    source: "mock" as const
-                }
-            })
-
-            setNavigationPlans(fallbackPlans)
-        } finally {
-            setNavigationLoading(false)
         }
     }
 
@@ -986,16 +1005,12 @@ export default function TripAdd() {
                                 {mapsApiKey ? (
                                     <APIProvider apiKey={mapsApiKey}>
                                         <Stack spacing={2}>
-                                            <Button
-                                                variant="outlined"
-                                                onClick={buildRoutes}
-                                                disabled={routesLoading || destinations.length < 2}
-                                            >
-                                                {routesLoading ? "Building route options..." : "Build route options (Places + Routes API)"}
-                                            </Button>
-
                                             {destinations.length < 2 && (
                                                 <Alert severity="info">Add at least two destinations to build routes.</Alert>
+                                            )}
+
+                                            {routesLoading && (
+                                                <Alert severity="info">Building route options...</Alert>
                                             )}
 
                                             {routesByLeg.length > 0 && (
@@ -1057,36 +1072,6 @@ export default function TripAdd() {
                                     <Alert severity="info">Add VITE_GOOGLE_API_KEY to enable Places + Routes + map rendering.</Alert>
                                 )}
 
-                                {/* Optional: still generate "open in maps" links */}
-                                <Button
-                                    variant="outlined"
-                                    onClick={buildNavigationPlans}
-                                    disabled={navigationLoading || destinations.length < 2}
-                                >
-                                    {navigationLoading ? "Building navigation..." : "Build navigation summary"}
-                                </Button>
-
-                                {navigationPlans.length > 0 && (
-                                    <Stack spacing={1}>
-                                        {navigationPlans.map((plan) => (
-                                            <Paper key={`${plan.origin}-${plan.destination}`} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
-                                                <Typography sx={{ fontWeight: 700 }}>
-                                                    {plan.origin} → {plan.destination}
-                                                </Typography>
-                                                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-                                                    Method: {plan.method ?? "driving"} • ETA: {plan.estimatedDuration ?? "Unknown"}
-                                                </Typography>
-                                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                                    Estimated cost: {toCurrency(plan.estimatedCost ?? 0)} • Source: {plan.source === "google_places" ? "Google APIs" : "Mock fallback"}
-                                                </Typography>
-                                                <Button href={plan.mapsUrl} target="_blank" rel="noreferrer" size="small" variant="text">
-                                                    Open navigation in Google Maps
-                                                </Button>
-                                            </Paper>
-                                        ))}
-                                    </Stack>
-                                )}
-
                                 {/* Flights */}
                                 {transportMode === "flight" && (
                                     <>
@@ -1115,7 +1100,7 @@ export default function TripAdd() {
                                             onClick={fetchFlights}
                                             disabled={flightLoading || !startDate || !endDate || !transportOriginInput || !transportDestinationInput}
                                         >
-                                            {flightLoading ? "Loading transport plan..." : "Get optimized multimodal plan"}
+                                            {flightLoading ? "Loading flight options..." : "Get flight options"}
                                         </Button>
 
                                         {transportError && <Alert severity="error">{transportError}</Alert>}
@@ -1130,34 +1115,17 @@ export default function TripAdd() {
 
                                         {mapsApiKey && (originAirport || destinationAirport) && (
                                             <APIProvider apiKey={mapsApiKey}>
-                                                <Box sx={{ height: 280, borderRadius: 3, overflow: "hidden", border: "1px solid rgba(47,65,86,0.12)" }}>
-                                                    <Map
-                                                        center={originAirport ? { lat: originAirport.airport.lat, lng: originAirport.airport.lng } : { lat: destinationAirport!.airport.lat, lng: destinationAirport!.airport.lng }}
-                                                        defaultZoom={4}
-                                                        mapId={mapId}
-                                                        style={{ width: "100%", height: "100%" }}
-                                                        mapTypeControl={false}
-                                                        streetViewControl={false}
-                                                        fullscreenControl={false}
-                                                    >
-                                                        {originAirport && (
-                                                            <AdvancedMarker position={{ lat: originAirport.airport.lat, lng: originAirport.airport.lng }}>
-                                                                <Pin background="#2E7D32" glyphColor="#fff" borderColor="#1B5E20" />
-                                                            </AdvancedMarker>
-                                                        )}
-                                                        {destinationAirport && (
-                                                            <AdvancedMarker position={{ lat: destinationAirport.airport.lat, lng: destinationAirport.airport.lng }}>
-                                                                <Pin background="#1565C0" glyphColor="#fff" borderColor="#0D47A1" />
-                                                            </AdvancedMarker>
-                                                        )}
-                                                    </Map>
-                                                </Box>
+                                                <AirportPinsMap
+                                                    originAirport={originAirport}
+                                                    destinationAirport={destinationAirport}
+                                                    mapId={mapId}
+                                                />
                                             </APIProvider>
                                         )}
 
                                         {transportPlan?.recommendations?.length ? (
                                             <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
-                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Ranked multimodal recommendations</Typography>
+                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Best flight options</Typography>
                                                 <Stack spacing={1}>
                                                     {transportPlan.recommendations.map((option) => (
                                                         <Typography key={`${option.title}-${option.score}`} variant="body2" color="text.secondary">
@@ -1189,7 +1157,7 @@ export default function TripAdd() {
                                                 >
                                                     <Typography sx={{ fontWeight: 700 }}>{flight.airline}</Typography>
                                                     <Typography color="text.secondary">{flight.route}</Typography>
-                                                    <Typography>{toCurrency(flight.price)} ({flight.source})</Typography>
+                                                    <Typography>{toCurrency(flight.price)}</Typography>
                                                 </Paper>
                                             ))}
                                         </Stack>
