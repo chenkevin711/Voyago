@@ -1,5 +1,5 @@
 
-import { useMemo, useRef, useEffect, useState } from "react"
+import { useMemo, useEffect, useState } from "react"
 import {
     Alert,
     Box,
@@ -7,7 +7,6 @@ import {
     Divider,
     MenuItem,
     Paper,
-    IconButton,
     Stack,
     Step,
     StepLabel,
@@ -15,7 +14,6 @@ import {
     TextField,
     Typography
 } from "@mui/material"
-import DragIndicatorIcon from "@mui/icons-material/DragIndicator"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
 import Page from "../components/Page"
@@ -30,20 +28,32 @@ import {
     tripNights
 } from "../tripPlanning"
 
-import {
-    APIProvider,
-    AdvancedMarker,
-    InfoWindow,
-    Map,
-    Pin,
-    useMap
-} from "@vis.gl/react-google-maps"
+import { APIProvider } from "@vis.gl/react-google-maps"
 import {
     getTransportPlan,
     resolveAirport,
-    type ResolvedAirport,
-    type TransportPlanResponse
+    type ResolvedAirport
 } from "../api/transport"
+import {
+    addDays,
+    formatTime,
+    buildLegFlightOptions,
+    type DestinationStop,
+    estimateCost,
+    modeLabel,
+    modeToTravelMode,
+    type LegFlightPlan,
+    type LegRoutes,
+    type ResolvedPlace,
+    type RouteOption,
+    toCurrency,
+    type TransportationMode,
+    resolvePlaceText,
+    computeLegRoutes,
+    withFallbackPlace
+} from "./tripAddUtils"
+import { AirportPinsMap, TripRouteMap } from "./tripAddMaps"
+import { DestinationsStepSection, FlightLegOptionsSection } from "./tripAddSections"
 
 const stepTitles = [
     "Name + Dates",
@@ -60,437 +70,11 @@ const fakeStays: StayOption[] = [
     { name: "Voyager Residence", location: "Waterfront", nightlyRate: 220 }
 ]
 
-type TransportationMode = "flight" | "train" | "road"
-
-type DestinationStop = {
-    name: string
-    days: number
-}
-
-type LegFlightPlan = {
-    id: string
-    origin: string
-    destination: string
-    departDate: string
-    stayDays: number
-    options: FlightOption[]
-    error?: string
-}
-
-type ResolvedPlace = {
-    name: string
-    placeId?: string
-    formattedAddress?: string
-    location: { lat: number; lng: number }
-}
-
-type RouteAlt = {
-    distanceMeters: number
-    duration: string
-    encodedPolyline: string
-}
-
-type RouteOption = {
-    mode: "driving" | "transit" | "walking"
-    label: string
-    duration: string
-    distanceMeters: number
-    estimatedCost: number
-    mapsUrl: string
-    source: "google_routes" | "mock"
-    encodedPolyline?: string
-}
-
-type LegRoutes = {
-    origin: string
-    destination: string
-    routes: RouteAlt[]
-}
-
-function toCurrency(amount: number): string {
-    return `$${amount.toLocaleString()}`
-}
-
-function formatTime(totalMinutes: number): string {
-    const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
-    const minutes = totalMinutes % 60
-    return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`
-}
-
-function addDays(date: string, days: number): string {
-    const d = new Date(date)
-    if (Number.isNaN(d.valueOf())) return date
-    d.setDate(d.getDate() + days)
-    return d.toISOString().slice(0, 10)
-}
-
 function slugify(value: string): string {
     return value
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "") || "trip"
-}
-
-function metersToMiles(meters: number): number {
-    return meters / 1609.344
-}
-
-function parseDurationSeconds(duration: string): number {
-    const clean = duration.replace(/s$/, "")
-    const h = /([0-9]+)h/.exec(clean)
-    const m = /([0-9]+)m/.exec(clean)
-    const s = /([0-9]+)$/.exec(clean)
-    return (h ? Number(h[1]) * 3600 : 0) + (m ? Number(m[1]) * 60 : 0) + (s ? Number(s[1]) : 0)
-}
-
-function estimateCost(params: { mode: "driving" | "transit" | "walking"; distanceMeters: number; duration: string }): number {
-    if (params.mode === "walking") return 0
-    const miles = metersToMiles(params.distanceMeters)
-    if (params.mode === "driving") return Math.max(4, Number((miles * 0.58).toFixed(2)))
-    const minutes = parseDurationSeconds(params.duration) / 60
-    return Math.max(3, Number((2.5 + minutes * 0.2).toFixed(2)))
-}
-
-function modeToTravelMode(mode: "driving" | "transit" | "walking"): "DRIVE" | "TRANSIT" | "WALK" {
-    if (mode === "transit") return "TRANSIT"
-    if (mode === "walking") return "WALK"
-    return "DRIVE"
-}
-
-function modeLabel(mode: "driving" | "transit" | "walking"): string {
-    if (mode === "transit") return "Transit"
-    if (mode === "walking") return "Walking"
-    return "Driving"
-}
-
-function decodePolyline(encoded: string): Array<[number, number]> {
-    let index = 0
-    const coordinates: Array<[number, number]> = []
-    let lat = 0
-    let lng = 0
-
-    while (index < encoded.length) {
-        let shift = 0
-        let result = 0
-        let byte: number
-
-        do {
-            byte = encoded.charCodeAt(index++) - 63
-            result |= (byte & 0x1f) << shift
-            shift += 5
-        } while (byte >= 0x20)
-
-        const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1)
-        lat += deltaLat
-
-        shift = 0
-        result = 0
-
-        do {
-            byte = encoded.charCodeAt(index++) - 63
-            result |= (byte & 0x1f) << shift
-            shift += 5
-        } while (byte >= 0x20)
-
-        const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1)
-        lng += deltaLng
-
-        coordinates.push([lat / 1e5, lng / 1e5])
-    }
-
-    return coordinates
-}
-
-/**
- * Places API (New) Text Search
- * Resolves a user-entered destination string to a Place + lat/lng
- */
-async function resolvePlaceText(params: {
-    apiKey: string
-    query: string
-}): Promise<ResolvedPlace | null> {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": params.apiKey,
-            // FieldMask is required and keeps payload small
-            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location"
-        },
-        body: JSON.stringify({
-            textQuery: params.query,
-            pageSize: 1
-        })
-    })
-
-    if (!res.ok) return null
-
-    const data = (await res.json()) as {
-        places?: Array<{
-            id?: string
-            displayName?: { text?: string }
-            formattedAddress?: string
-            location?: { latitude?: number; longitude?: number }
-        }>
-    }
-
-    const p = data.places?.[0]
-    const lat = p?.location?.latitude
-    const lng = p?.location?.longitude
-
-    if (lat == null || lng == null) return null
-
-    return {
-        name: p?.displayName?.text ?? params.query,
-        placeId: p?.id,
-        formattedAddress: p?.formattedAddress,
-        location: { lat, lng }
-    }
-}
-
-/**
- * Routes API computeRoutes
- * Returns route alternatives with encoded polylines for drawing on the map
- */
-async function computeLegRoutes(params: {
-    apiKey: string
-    origin: { lat: number; lng: number }
-    destination: { lat: number; lng: number }
-    travelMode: "DRIVE" | "TRANSIT" | "WALK"
-    alternatives: number
-}): Promise<RouteAlt[]> {
-    const res = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": params.apiKey,
-            // Only request what we actually render
-            "X-Goog-FieldMask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
-        },
-        body: JSON.stringify({
-            origin: {
-                location: {
-                    latLng: { latitude: params.origin.lat, longitude: params.origin.lng }
-                }
-            },
-            destination: {
-                location: {
-                    latLng: { latitude: params.destination.lat, longitude: params.destination.lng }
-                }
-            },
-            travelMode: params.travelMode,
-            computeAlternativeRoutes: params.alternatives > 0,
-            languageCode: "en-US",
-            units: "IMPERIAL"
-        })
-    })
-
-    if (!res.ok) return []
-
-    const data = (await res.json()) as {
-        routes?: Array<{
-            distanceMeters?: number
-            duration?: string
-            polyline?: { encodedPolyline?: string }
-        }>
-    }
-
-    return (data.routes ?? [])
-        .slice(0, Math.max(1, params.alternatives + 1))
-        .flatMap((r) => {
-            const encoded = r.polyline?.encodedPolyline
-            if (!encoded) return []
-            return [
-                {
-                    distanceMeters: r.distanceMeters ?? 0,
-                    duration: r.duration ?? "",
-                    encodedPolyline: encoded
-                }
-            ]
-        })
-}
-
-/**
- * Draw selected route polylines on top of the map using the underlying Maps JS Polyline.
- * @vis.gl/react-google-maps gives us the map instance via useMap()
- */
-function RouteOverlay(props: {
-    legs: LegRoutes[]
-    selectedRouteByLeg: Record<number, number>
-}) {
-    const map = useMap()
-    const polylinesRef = useRef<Array<{ setMap: (map: object | null) => void }>>([])
-
-    useEffect(() => {
-        if (!map) return
-        if (!window.google?.maps) return
-
-        // Clear old lines
-        polylinesRef.current.forEach((p) => p.setMap(null))
-        polylinesRef.current = []
-
-        props.legs.forEach((leg, legIndex) => {
-            const choice = props.selectedRouteByLeg[legIndex] ?? 0
-            const route = leg.routes[choice]
-            if (!route) return
-
-            const decoded = decodePolyline(route.encodedPolyline)
-            const path = decoded.map(([lat, lng]) => ({ lat, lng }))
-
-            const line = new window.google.maps.Polyline({
-                path,
-                clickable: false,
-                geodesic: true,
-                strokeOpacity: 0.9,
-                strokeWeight: 5
-            })
-
-            line.setMap(map)
-            polylinesRef.current.push(line)
-        })
-
-        return () => {
-            polylinesRef.current.forEach((p) => p.setMap(null))
-            polylinesRef.current = []
-        }
-    }, [map, props.legs, props.selectedRouteByLeg])
-
-    return null
-}
-
-function FitMapToPoints(props: { points: Array<{ lat: number; lng: number }>; singlePointZoom?: number }) {
-    const map = useMap()
-
-    useEffect(() => {
-        if (!map || !window.google?.maps || props.points.length === 0) return
-
-        if (props.points.length === 1) {
-            map.panTo(props.points[0])
-            map.setZoom(props.singlePointZoom ?? 8)
-            return
-        }
-
-        const bounds = new window.google.maps.LatLngBounds()
-        props.points.forEach((point) => bounds.extend(point))
-        map.fitBounds(bounds, 64)
-    }, [map, props.points, props.singlePointZoom])
-
-    return null
-}
-
-function TripRouteMap(props: {
-    loading: boolean
-    places: ResolvedPlace[]
-    legs: LegRoutes[]
-    selectedRouteByLeg: Record<number, number>
-    mapId?: string
-}) {
-    const [selectedPlace, setSelectedPlace] = useState<ResolvedPlace | null>(null)
-    const center = useMemo(() => {
-        if (props.places.length > 0) return props.places[0].location
-        return { lat: 46.5, lng: 8.4 }
-    }, [props.places])
-
-    return (
-        <Box
-            sx={{
-                position: "relative",
-                height: { xs: 320, md: 420 },
-                borderRadius: 4,
-                overflow: "hidden",
-                border: "1px solid rgba(47,65,86,0.12)"
-            }}
-        >
-            {props.loading && (
-                <Box
-                    sx={{
-                        position: "absolute",
-                        inset: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        bgcolor: "rgba(255,255,255,0.75)",
-                        zIndex: 2
-                    }}
-                >
-                    {/* Loading overlay while routes compute */}
-                    <Typography sx={{ mr: 2, color: "text.secondary" }}>Loading route options…</Typography>
-                </Box>
-            )}
-
-            <Map
-                defaultCenter={center}
-                defaultZoom={5}
-                mapId={props.mapId}
-                style={{ width: "100%", height: "100%" }}
-                mapTypeControl={false}
-                streetViewControl={false}
-                fullscreenControl={false}
-            >
-                {props.places.map((p) => (
-                    <AdvancedMarker
-                        key={p.placeId ?? p.name}
-                        position={p.location}
-                        title={p.name}
-                        onClick={() => setSelectedPlace(p)}
-                    >
-                        <Pin />
-                    </AdvancedMarker>
-                ))}
-
-                {selectedPlace && (
-                    <InfoWindow position={selectedPlace.location} onCloseClick={() => setSelectedPlace(null)}>
-                        <Box>
-                            <Typography sx={{ fontWeight: 700 }}>{selectedPlace.name}</Typography>
-                            {selectedPlace.formattedAddress && (
-                                <Typography variant="body2" color="text.secondary">
-                                    {selectedPlace.formattedAddress}
-                                </Typography>
-                            )}
-                        </Box>
-                    </InfoWindow>
-                )}
-
-                <FitMapToPoints points={props.places.map((place) => place.location)} />
-                <RouteOverlay legs={props.legs} selectedRouteByLeg={props.selectedRouteByLeg} />
-            </Map>
-        </Box>
-    )
-}
-
-function AirportPinsMap(props: {
-    originAirport: ResolvedAirport | null
-    destinationAirport: ResolvedAirport | null
-    mapId?: string
-}) {
-    const points = [props.originAirport?.airport, props.destinationAirport?.airport]
-        .flatMap((airport) => (airport ? [{ lat: airport.lat, lng: airport.lng }] : []))
-
-    return (
-        <Box sx={{ height: 280, borderRadius: 3, overflow: "hidden", border: "1px solid rgba(47,65,86,0.12)" }}>
-            <Map
-                defaultCenter={points[0] ?? { lat: 39.5, lng: -98.35 }}
-                defaultZoom={4}
-                mapId={props.mapId}
-                style={{ width: "100%", height: "100%" }}
-                mapTypeControl={false}
-                streetViewControl={false}
-                fullscreenControl={false}
-            >
-                {props.originAirport && (
-                    <AdvancedMarker position={{ lat: props.originAirport.airport.lat, lng: props.originAirport.airport.lng }}>
-                        <Pin background="#2E7D32" glyphColor="#fff" borderColor="#1B5E20" />
-                    </AdvancedMarker>
-                )}
-                {props.destinationAirport && (
-                    <AdvancedMarker position={{ lat: props.destinationAirport.airport.lat, lng: props.destinationAirport.airport.lng }}>
-                        <Pin background="#1565C0" glyphColor="#fff" borderColor="#0D47A1" />
-                    </AdvancedMarker>
-                )}
-                <FitMapToPoints points={points} singlePointZoom={5} />
-            </Map>
-        </Box>
-    )
 }
 
 export default function TripAdd() {
@@ -515,7 +99,6 @@ export default function TripAdd() {
     const [legFlightPlans, setLegFlightPlans] = useState<LegFlightPlan[]>([])
     const [flightLoading, setFlightLoading] = useState(false)
     const [transportOriginInput, setTransportOriginInput] = useState("")
-    const [transportDestinationInput, setTransportDestinationInput] = useState("")
     const [originAirport, setOriginAirport] = useState<ResolvedAirport | null>(null)
     const [destinationAirport, setDestinationAirport] = useState<ResolvedAirport | null>(null)
     const [transportError, setTransportError] = useState<string | null>(null)
@@ -568,7 +151,7 @@ export default function TripAdd() {
             ; (async () => {
                 const results = await Promise.all(destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d })))
                 if (cancelled) return
-                setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])))
+                setResolvedPlaces(destinations.map((name, idx) => results[idx] ?? withFallbackPlace(name)))
             })()
 
         return () => {
@@ -596,12 +179,6 @@ export default function TripAdd() {
 
         setNavigationPlans(plans)
     }, [routeOptionsByLeg, routesByLeg, selectedRouteByLeg])
-
-    useEffect(() => {
-        if (destinations.length > 0 && !transportDestinationInput) {
-            setTransportDestinationInput(destinations[0])
-        }
-    }, [destinations, transportDestinationInput])
 
     useEffect(() => {
         if (activeStep !== 3) return
@@ -640,26 +217,6 @@ export default function TripAdd() {
             const [item] = next.splice(fromIdx, 1)
             next.splice(toIdx, 0, item)
             return next
-        })
-    }
-
-    function buildLegFlightOptions(params: { plan: TransportPlanResponse; departDate: string; origin: string; destination: string; stayDays: number }): FlightOption[] {
-        const baseOptions = params.plan.recommendations.slice(0, 3)
-        return baseOptions.map((option, idx) => {
-            const firstSegment = option.segments[0]
-            const durationMinutes = option.totalDurationMinutes ?? 120 + idx * 85
-            const departMinutes = 6 * 60 + idx * 240
-            const arrivalMinutes = departMinutes + durationMinutes
-            return {
-                airline: option.title,
-                route: firstSegment?.summary ?? `${params.plan.origin.airport.code} → ${params.plan.destination.airport.code}`,
-                price: option.totalPriceUsd ?? 0,
-                source: "serpapi",
-                departureDate: params.departDate,
-                departureTime: formatTime(departMinutes),
-                arrivalTime: formatTime(arrivalMinutes),
-                details: `${params.origin} → ${params.destination} • Stay ${params.stayDays} day${params.stayDays === 1 ? "" : "s"}`
-            }
         })
     }
 
@@ -732,7 +289,7 @@ export default function TripAdd() {
     }
 
     async function resolveAirportInput(which: "origin" | "destination") {
-        const value = which === "origin" ? transportOriginInput : transportDestinationInput
+        const value = which === "origin" ? transportOriginInput : destinationStops[0]?.name ?? ""
         if (!value.trim()) return
 
         try {
@@ -1027,93 +584,20 @@ export default function TripAdd() {
                         )}
 
                         {activeStep === 2 && (
-                            <Stack spacing={2}>
-                                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                                    <TextField
-                                        label="Add destination"
-                                        placeholder="Paris or PAR"
-                                        value={destinationInput}
-                                        onChange={(e) => setDestinationInput(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                                e.preventDefault()
-                                                addDestination()
-                                            }
-                                        }}
-                                        fullWidth
-                                    />
-                                    <TextField
-                                        label="Days at destination"
-                                        type="number"
-                                        value={destinationDaysInput}
-                                        onChange={(e) => setDestinationDaysInput(e.target.value)}
-                                        sx={{ width: { xs: "100%", sm: 190 } }}
-                                        inputProps={{ min: 1 }}
-                                    />
-                                    <Button variant="contained" onClick={addDestination}>Add</Button>
-                                </Stack>
-
-                                <Stack spacing={1}>
-                                    {destinationStops.map((destinationStop, idx) => (
-                                        <Paper
-                                            key={`${destinationStop.name}-${idx}`}
-                                            elevation={0}
-                                            draggable
-                                            onDragStart={(e) => {
-                                                e.dataTransfer.setData("text/plain", String(idx))
-                                            }}
-                                            onDragOver={(e) => e.preventDefault()}
-                                            onDrop={(e) => {
-                                                const from = Number(e.dataTransfer.getData("text/plain"))
-                                                if (!Number.isNaN(from)) moveDestination(from, idx)
-                                            }}
-                                            sx={{
-                                                p: 1.25,
-                                                borderRadius: 2,
-                                                border: "1px solid rgba(47,65,86,0.15)",
-                                                display: "flex",
-                                                alignItems: "center",
-                                                justifyContent: "space-between",
-                                                gap: 1
-                                            }}
-                                        >
-                                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1 }}>
-                                                <DragIndicatorIcon fontSize="small" color="disabled" />
-                                                <Typography sx={{ fontWeight: 600 }}>{idx + 1}. {destinationStop.name}</Typography>
-                                            </Stack>
-                                            <TextField
-                                                label="Days"
-                                                type="number"
-                                                size="small"
-                                                value={destinationStop.days}
-                                                onChange={(e) => updateDestinationDays(destinationStop.name, e.target.value)}
-                                                sx={{ width: 90 }}
-                                                inputProps={{ min: 1 }}
-                                            />
-                                            <IconButton size="small" onClick={() => removeDestination(destinationStop.name)}>
-                                                ×
-                                            </IconButton>
-                                        </Paper>
-                                    ))}
-                                </Stack>
-
-                                <Alert severity="info">
-                                    Tip: Flights results are best when destinations are IATA metro/airport codes (ex: PAR, ROM, BCN).
-                                    Routes/Places will work fine with city names.
-                                </Alert>
-
-                                {mapsApiKey && destinations.length > 0 && (
-                                    <APIProvider apiKey={mapsApiKey}>
-                                        <TripRouteMap
-                                            loading={false}
-                                            places={resolvedPlaces}
-                                            legs={[]}
-                                            selectedRouteByLeg={{}}
-                                            mapId={mapId}
-                                        />
-                                    </APIProvider>
-                                )}
-                            </Stack>
+                            <DestinationsStepSection
+                                destinationInput={destinationInput}
+                                destinationDaysInput={destinationDaysInput}
+                                destinationStops={destinationStops}
+                                mapsApiKey={mapsApiKey}
+                                mapId={mapId}
+                                resolvedPlaces={resolvedPlaces}
+                                onDestinationInputChange={setDestinationInput}
+                                onDestinationDaysInputChange={setDestinationDaysInput}
+                                onAddDestination={addDestination}
+                                onMoveDestination={moveDestination}
+                                onUpdateDestinationDays={updateDestinationDays}
+                                onRemoveDestination={removeDestination}
+                            />
                         )}
 
                         {activeStep === 3 && (
@@ -1179,49 +663,14 @@ export default function TripAdd() {
                                             </APIProvider>
                                         )}
 
-                                        {legFlightPlans.length > 0 && (
-                                            <Typography sx={{ fontWeight: 700 }}>Flight options by destination leg</Typography>
-                                        )}
-
-                                        <Stack spacing={1.5}>
-                                            {legFlightPlans.map((legPlan) => (
-                                                <Paper key={legPlan.id} elevation={0} sx={{ p: 2, borderRadius: 2, border: "1px solid rgba(47,65,86,0.15)" }}>
-                                                    <Typography sx={{ fontWeight: 700 }}>{legPlan.origin} → {legPlan.destination}</Typography>
-                                                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                                        Depart {legPlan.departDate} • Stay {legPlan.stayDays} day{legPlan.stayDays === 1 ? "" : "s"}
-                                                    </Typography>
-                                                    {legPlan.error && <Alert severity="warning" sx={{ mb: 1 }}>{legPlan.error}</Alert>}
-                                                    <Stack spacing={1}>
-                                                        {legPlan.options.slice(0, 3).map((flight, idx) => {
-                                                            const selected = selectedFlightsByLeg[legPlan.id]?.airline === flight.airline
-                                                                && selectedFlightsByLeg[legPlan.id]?.departureTime === flight.departureTime
-                                                            return (
-                                                                <Paper
-                                                                    key={`${legPlan.id}-${flight.airline}-${idx}`}
-                                                                    variant="outlined"
-                                                                    sx={{
-                                                                        p: 1.25,
-                                                                        borderColor: selected ? "primary.main" : "rgba(47,65,86,0.2)",
-                                                                        borderWidth: selected ? 2 : 1,
-                                                                        cursor: "pointer"
-                                                                    }}
-                                                                    onClick={() => {
-                                                                        setSelectedFlightsByLeg((prev) => ({ ...prev, [legPlan.id]: flight }))
-                                                                        setSelectedFlight(flight)
-                                                                    }}
-                                                                >
-                                                                    <Typography sx={{ fontWeight: 700 }}>{flight.airline}</Typography>
-                                                                    <Typography variant="body2" color="text.secondary">
-                                                                        Option {idx + 1}: {flight.departureTime ?? "—"} → {flight.arrivalTime ?? "—"}
-                                                                    </Typography>
-                                                                    <Typography variant="body2">Price: {toCurrency(flight.price)}</Typography>
-                                                                </Paper>
-                                                            )
-                                                        })}
-                                                    </Stack>
-                                                </Paper>
-                                            ))}
-                                        </Stack>
+                                        <FlightLegOptionsSection
+                                            legFlightPlans={legFlightPlans}
+                                            selectedFlightsByLeg={selectedFlightsByLeg}
+                                            onSelectFlight={(legId, flight) => {
+                                                setSelectedFlightsByLeg((prev) => ({ ...prev, [legId]: flight }))
+                                                setSelectedFlight(flight)
+                                            }}
+                                        />
                                     </>
                                 )}
                             </Stack>
