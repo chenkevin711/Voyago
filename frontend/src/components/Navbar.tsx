@@ -24,7 +24,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import BlockIcon from "@mui/icons-material/Block";
 import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
-import { Link as RouterLink, useNavigate } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 import axios from "axios";
 import { useCookies } from "react-cookie";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -37,7 +37,6 @@ interface PendingUser {
 
 export default function Navbar() {
     const [cookies, , removeCookie] = useCookies(["loggedIn"]);
-    const navigate = useNavigate();
 
     // Notification popover state
     const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
