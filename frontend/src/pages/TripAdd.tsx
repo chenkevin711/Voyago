@@ -62,6 +62,21 @@ const fakeStays: StayOption[] = [
 
 type TransportationMode = "flight" | "train" | "road"
 
+type DestinationStop = {
+    name: string
+    days: number
+}
+
+type LegFlightPlan = {
+    id: string
+    origin: string
+    destination: string
+    departDate: string
+    stayDays: number
+    options: FlightOption[]
+    error?: string
+}
+
 type ResolvedPlace = {
     name: string
     placeId?: string
@@ -96,11 +111,17 @@ function toCurrency(amount: number): string {
     return `$${amount.toLocaleString()}`
 }
 
-function toDuration(minutes?: number): string {
-    if (!minutes) return "Unknown"
-    const h = Math.floor(minutes / 60)
-    const m = minutes % 60
-    return h > 0 ? `${h}h ${m}m` : `${m}m`
+function formatTime(totalMinutes: number): string {
+    const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
+    const minutes = totalMinutes % 60
+    return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`
+}
+
+function addDays(date: string, days: number): string {
+    const d = new Date(date)
+    if (Number.isNaN(d.valueOf())) return date
+    d.setDate(d.getDate() + days)
+    return d.toISOString().slice(0, 10)
 }
 
 function slugify(value: string): string {
@@ -483,18 +504,20 @@ export default function TripAdd() {
     const [endDate, setEndDate] = useState("")
     const [budgetInput, setBudgetInput] = useState("")
     const [destinationInput, setDestinationInput] = useState("")
-    const [destinations, setDestinations] = useState<string[]>([])
+    const [destinationDaysInput, setDestinationDaysInput] = useState("2")
+    const [destinationStops, setDestinationStops] = useState<DestinationStop[]>([])
     const [transportMode, setTransportMode] = useState<TransportationMode>("flight")
     const [transportationNotes, setTransportationNotes] = useState("")
 
     const [flights, setFlights] = useState<FlightOption[]>([])
     const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined)
+    const [selectedFlightsByLeg, setSelectedFlightsByLeg] = useState<Record<string, FlightOption>>({})
+    const [legFlightPlans, setLegFlightPlans] = useState<LegFlightPlan[]>([])
     const [flightLoading, setFlightLoading] = useState(false)
     const [transportOriginInput, setTransportOriginInput] = useState("")
     const [transportDestinationInput, setTransportDestinationInput] = useState("")
     const [originAirport, setOriginAirport] = useState<ResolvedAirport | null>(null)
     const [destinationAirport, setDestinationAirport] = useState<ResolvedAirport | null>(null)
-    const [transportPlan, setTransportPlan] = useState<TransportPlanResponse | null>(null)
     const [transportError, setTransportError] = useState<string | null>(null)
 
     const [accommodations] = useState<StayOption[]>(fakeStays)
@@ -514,10 +537,12 @@ export default function TripAdd() {
     const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
     const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
+    const destinations = useMemo(() => destinationStops.map((stop) => stop.name), [destinationStops])
+
     const nights = tripNights(startDate, endDate)
     const budget = Number(budgetInput)
 
-    const flightCost = selectedFlight?.price ?? 0
+    const flightCost = Object.values(selectedFlightsByLeg).reduce((sum, option) => sum + option.price, 0)
     const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0
     const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0)
     const estimatedTotal = flightCost + stayCost + attractionCost
@@ -531,7 +556,7 @@ export default function TripAdd() {
         if (activeStep === 1) return budgetInput.trim().length > 0 && budget > 0
         if (activeStep === 2) return destinations.length > 0
         return true
-    }, [activeStep, budget, budgetInput, destinations.length, endDate, startDate, tripName])
+    }, [activeStep, budget, budgetInput, destinationStops.length, destinations.length, endDate, startDate, tripName])
 
     useEffect(() => {
         if (!mapsApiKey || destinations.length === 0) {
@@ -587,6 +612,7 @@ export default function TripAdd() {
 
     function addDestination() {
         const value = destinationInput.trim()
+        const days = Math.max(1, Number(destinationDaysInput) || 1)
         if (!value) return
 
         if (destinations.includes(value)) {
@@ -594,17 +620,22 @@ export default function TripAdd() {
             return
         }
 
-        setDestinations((prev) => [...prev, value])
+        setDestinationStops((prev) => [...prev, { name: value, days }])
         setDestinationInput("")
     }
 
     function removeDestination(city: string) {
-        setDestinations((prev) => prev.filter((d) => d !== city))
+        setDestinationStops((prev) => prev.filter((d) => d.name !== city))
+    }
+
+    function updateDestinationDays(city: string, daysInput: string) {
+        const days = Math.max(1, Number(daysInput) || 1)
+        setDestinationStops((prev) => prev.map((d) => d.name === city ? { ...d, days } : d))
     }
 
     function moveDestination(fromIdx: number, toIdx: number) {
         if (fromIdx === toIdx || toIdx < 0 || toIdx >= destinations.length) return
-        setDestinations((prev) => {
+        setDestinationStops((prev) => {
             const next = [...prev]
             const [item] = next.splice(fromIdx, 1)
             next.splice(toIdx, 0, item)
@@ -612,47 +643,89 @@ export default function TripAdd() {
         })
     }
 
+    function buildLegFlightOptions(params: { plan: TransportPlanResponse; departDate: string; origin: string; destination: string; stayDays: number }): FlightOption[] {
+        const baseOptions = params.plan.recommendations.slice(0, 3)
+        return baseOptions.map((option, idx) => {
+            const firstSegment = option.segments[0]
+            const durationMinutes = option.totalDurationMinutes ?? 120 + idx * 85
+            const departMinutes = 6 * 60 + idx * 240
+            const arrivalMinutes = departMinutes + durationMinutes
+            return {
+                airline: option.title,
+                route: firstSegment?.summary ?? `${params.plan.origin.airport.code} → ${params.plan.destination.airport.code}`,
+                price: option.totalPriceUsd ?? 0,
+                source: "serpapi",
+                departureDate: params.departDate,
+                departureTime: formatTime(departMinutes),
+                arrivalTime: formatTime(arrivalMinutes),
+                details: `${params.origin} → ${params.destination} • Stay ${params.stayDays} day${params.stayDays === 1 ? "" : "s"}`
+            }
+        })
+    }
+
     async function fetchFlights() {
-        if (!startDate || !endDate || !transportOriginInput.trim() || !transportDestinationInput.trim()) return
+        if (!startDate || !transportOriginInput.trim() || destinationStops.length === 0) return
 
         setFlightLoading(true)
         setTransportError(null)
         try {
-            const result = await getTransportPlan({
-                origin: transportOriginInput,
-                destination: transportDestinationInput,
-                outboundDate: startDate,
-                returnDate: endDate
-            })
+            const stops = [transportOriginInput.trim(), ...destinationStops.map((stop) => stop.name)]
+            const plans: LegFlightPlan[] = []
+            const selectedByLeg: Record<string, FlightOption> = {}
+            let cursorDate = startDate
 
-            setTransportPlan(result)
-            setOriginAirport(result.origin)
-            setDestinationAirport(result.destination)
+            for (let idx = 0; idx < destinationStops.length; idx += 1) {
+                const stop = destinationStops[idx]
+                const origin = stops[idx]
+                const destination = stop.name
+                const departDate = cursorDate
+                const returnDate = addDays(cursorDate, stop.days)
+                const legId = `${origin}-${destination}-${idx}`
 
-            const results: FlightOption[] = result.recommendations.map((option) => {
-                const firstSegment = option.segments[0]
-                return {
-                    airline: option.title,
-                    route: firstSegment?.summary ?? `${result.origin.airport.code} → ${result.destination.airport.code}`,
-                    price: option.totalPriceUsd ?? 0,
-                    source: "serpapi",
-                    departureDate: startDate,
-                    departureTime: "Time varies",
-                    arrivalTime: "See carrier",
-                    details: option.segments.map((seg) => `${seg.mode.toUpperCase()}: ${seg.summary}`).join(" • ")
+                try {
+                    const result = await getTransportPlan({
+                        origin,
+                        destination,
+                        outboundDate: departDate,
+                        returnDate
+                    })
+
+                    if (idx === 0) {
+                        setOriginAirport(result.origin)
+                        setDestinationAirport(result.destination)
+                    }
+
+                    const options = buildLegFlightOptions({ plan: result, departDate, origin, destination, stayDays: stop.days })
+                    plans.push({ id: legId, origin, destination, departDate, stayDays: stop.days, options })
+                    if (options[0]) selectedByLeg[legId] = options[0]
+                } catch {
+                    const fallbackOptions: FlightOption[] = Array.from({ length: 3 }, (_, optionIdx) => ({
+                        airline: `Fallback option ${optionIdx + 1}`,
+                        route: `${origin} → ${destination}`,
+                        price: 150 + optionIdx * 80,
+                        source: "mock",
+                        departureDate: departDate,
+                        departureTime: formatTime((7 + optionIdx * 4) * 60),
+                        arrivalTime: formatTime((10 + optionIdx * 4) * 60),
+                        details: `${origin} → ${destination} • Stay ${stop.days} days`
+                    }))
+                    plans.push({ id: legId, origin, destination, departDate, stayDays: stop.days, options: fallbackOptions, error: "Could not fetch live options for this leg." })
+                    selectedByLeg[legId] = fallbackOptions[0]
                 }
-            })
 
-            if (results.length === 0) {
-                setFlights([{ airline: "No recommendation found", route: `${transportOriginInput} → ${transportDestinationInput}`, price: 0, source: "mock" }])
-                return
+                cursorDate = returnDate
             }
 
-            setFlights(results)
+            setLegFlightPlans(plans)
+            setSelectedFlightsByLeg(selectedByLeg)
+            const flattenedOptions = plans.flatMap((plan) => plan.options)
+            setFlights(flattenedOptions)
+            setSelectedFlight(flattenedOptions[0])
         } catch {
-            setTransportPlan(null)
             setTransportError("Unable to build transportation plan. Ensure backend is running and SERP_API_KEY is set in backend .env.")
-            setFlights([{ airline: "Fallback", route: `${transportOriginInput} → ${transportDestinationInput}`, price: 0, source: "mock" }])
+            setLegFlightPlans([])
+            setFlights([])
+            setSelectedFlightsByLeg({})
         } finally {
             setFlightLoading(false)
         }
@@ -791,8 +864,10 @@ export default function TripAdd() {
                 }]
             })
             setNavigationPlans(plans)
-        } finally {
-
+        } catch {
+            setRoutesByLeg([])
+            setSelectedRouteByLeg({})
+            setRouteOptionsByLeg({})
         }
     }
 
@@ -953,7 +1028,7 @@ export default function TripAdd() {
 
                         {activeStep === 2 && (
                             <Stack spacing={2}>
-                                <Stack direction="row" spacing={1}>
+                                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                                     <TextField
                                         label="Add destination"
                                         placeholder="Paris or PAR"
@@ -967,13 +1042,21 @@ export default function TripAdd() {
                                         }}
                                         fullWidth
                                     />
+                                    <TextField
+                                        label="Days at destination"
+                                        type="number"
+                                        value={destinationDaysInput}
+                                        onChange={(e) => setDestinationDaysInput(e.target.value)}
+                                        sx={{ width: { xs: "100%", sm: 190 } }}
+                                        inputProps={{ min: 1 }}
+                                    />
                                     <Button variant="contained" onClick={addDestination}>Add</Button>
                                 </Stack>
 
                                 <Stack spacing={1}>
-                                    {destinations.map((destination, idx) => (
+                                    {destinationStops.map((destinationStop, idx) => (
                                         <Paper
-                                            key={`${destination}-${idx}`}
+                                            key={`${destinationStop.name}-${idx}`}
                                             elevation={0}
                                             draggable
                                             onDragStart={(e) => {
@@ -994,11 +1077,20 @@ export default function TripAdd() {
                                                 gap: 1
                                             }}
                                         >
-                                            <Stack direction="row" spacing={1} alignItems="center">
+                                            <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1 }}>
                                                 <DragIndicatorIcon fontSize="small" color="disabled" />
-                                                <Typography sx={{ fontWeight: 600 }}>{idx + 1}. {destination}</Typography>
+                                                <Typography sx={{ fontWeight: 600 }}>{idx + 1}. {destinationStop.name}</Typography>
                                             </Stack>
-                                            <IconButton size="small" onClick={() => removeDestination(destination)}>
+                                            <TextField
+                                                label="Days"
+                                                type="number"
+                                                size="small"
+                                                value={destinationStop.days}
+                                                onChange={(e) => updateDestinationDays(destinationStop.name, e.target.value)}
+                                                sx={{ width: 90 }}
+                                                inputProps={{ min: 1 }}
+                                            />
+                                            <IconButton size="small" onClick={() => removeDestination(destinationStop.name)}>
                                                 ×
                                             </IconButton>
                                         </Paper>
@@ -1053,12 +1145,6 @@ export default function TripAdd() {
                                             onChange={(e) => setTransportOriginInput(e.target.value)}
                                             placeholder="e.g. Philadelphia or PHL"
                                         />
-                                        <TextField
-                                            label="Destination (city or airport code)"
-                                            value={transportDestinationInput}
-                                            onChange={(e) => setTransportDestinationInput(e.target.value)}
-                                            placeholder="e.g. Paris or CDG"
-                                        />
 
                                         <Stack direction="row" spacing={1}>
                                             <Button variant="outlined" onClick={() => void resolveAirportInput("origin")}>Resolve origin airport</Button>
@@ -1068,9 +1154,9 @@ export default function TripAdd() {
                                         <Button
                                             variant="outlined"
                                             onClick={fetchFlights}
-                                            disabled={flightLoading || !startDate || !endDate || !transportOriginInput || !transportDestinationInput}
+                                            disabled={flightLoading || !startDate || !transportOriginInput || destinationStops.length === 0}
                                         >
-                                            {flightLoading ? "Loading flight options..." : "Get flight options"}
+                                            {flightLoading ? "Loading flight options..." : "Get flight options for all destination legs"}
                                         </Button>
 
                                         {transportError && <Alert severity="error">{transportError}</Alert>}
@@ -1093,48 +1179,46 @@ export default function TripAdd() {
                                             </APIProvider>
                                         )}
 
-                                        {transportPlan?.recommendations?.length ? (
-                                            <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
-                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Best flight options</Typography>
-                                                <Stack spacing={1}>
-                                                    {transportPlan.recommendations.map((option) => (
-                                                        <Typography key={`${option.title}-${option.score}`} variant="body2" color="text.secondary">
-                                                            {option.title}: {toDuration(option.totalDurationMinutes)} • ${option.totalPriceUsd ?? "—"}
-                                                        </Typography>
-                                                    ))}
-                                                </Stack>
-                                            </Paper>
-                                        ) : null}
+                                        {legFlightPlans.length > 0 && (
+                                            <Typography sx={{ fontWeight: 700 }}>Flight options by destination leg</Typography>
+                                        )}
 
-                                        <Stack spacing={1}>
-                                            {flights.map((flight) => (
-                                                <Paper
-                                                    key={`${flight.airline}-${flight.route}-${flight.price}`}
-                                                    elevation={0}
-                                                    sx={{
-                                                        p: 2,
-                                                        borderRadius: 2,
-                                                        border: selectedFlight?.route === flight.route && selectedFlight.airline === flight.airline
-                                                            ? "2px solid"
-                                                            : "1px solid rgba(47,65,86,0.15)",
-                                                        borderColor:
-                                                            selectedFlight?.route === flight.route && selectedFlight.airline === flight.airline
-                                                                ? "primary.main"
-                                                                : "rgba(47,65,86,0.15)",
-                                                        cursor: "pointer"
-                                                    }}
-                                                    onClick={() => setSelectedFlight(flight)}
-                                                >
-                                                    <Typography sx={{ fontWeight: 700 }}>{flight.airline}</Typography>
-                                                    <Typography color="text.secondary">{flight.route}</Typography>
-                                                    <Typography>{toCurrency(flight.price)}</Typography>
-                                                    {flight.departureDate && (
-                                                        <Typography variant="body2" color="text.secondary">
-                                                            {flight.departureDate} {flight.departureTime ? `• ${flight.departureTime}` : ""}
-                                                            {flight.arrivalTime ? ` → ${flight.arrivalTime}` : ""}
-                                                        </Typography>
-                                                    )}
-                                                    {flight.details && <Typography variant="body2" color="text.secondary">{flight.details}</Typography>}
+                                        <Stack spacing={1.5}>
+                                            {legFlightPlans.map((legPlan) => (
+                                                <Paper key={legPlan.id} elevation={0} sx={{ p: 2, borderRadius: 2, border: "1px solid rgba(47,65,86,0.15)" }}>
+                                                    <Typography sx={{ fontWeight: 700 }}>{legPlan.origin} → {legPlan.destination}</Typography>
+                                                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                                        Depart {legPlan.departDate} • Stay {legPlan.stayDays} day{legPlan.stayDays === 1 ? "" : "s"}
+                                                    </Typography>
+                                                    {legPlan.error && <Alert severity="warning" sx={{ mb: 1 }}>{legPlan.error}</Alert>}
+                                                    <Stack spacing={1}>
+                                                        {legPlan.options.slice(0, 3).map((flight, idx) => {
+                                                            const selected = selectedFlightsByLeg[legPlan.id]?.airline === flight.airline
+                                                                && selectedFlightsByLeg[legPlan.id]?.departureTime === flight.departureTime
+                                                            return (
+                                                                <Paper
+                                                                    key={`${legPlan.id}-${flight.airline}-${idx}`}
+                                                                    variant="outlined"
+                                                                    sx={{
+                                                                        p: 1.25,
+                                                                        borderColor: selected ? "primary.main" : "rgba(47,65,86,0.2)",
+                                                                        borderWidth: selected ? 2 : 1,
+                                                                        cursor: "pointer"
+                                                                    }}
+                                                                    onClick={() => {
+                                                                        setSelectedFlightsByLeg((prev) => ({ ...prev, [legPlan.id]: flight }))
+                                                                        setSelectedFlight(flight)
+                                                                    }}
+                                                                >
+                                                                    <Typography sx={{ fontWeight: 700 }}>{flight.airline}</Typography>
+                                                                    <Typography variant="body2" color="text.secondary">
+                                                                        Option {idx + 1}: {flight.departureTime ?? "—"} → {flight.arrivalTime ?? "—"}
+                                                                    </Typography>
+                                                                    <Typography variant="body2">Price: {toCurrency(flight.price)}</Typography>
+                                                                </Paper>
+                                                            )
+                                                        })}
+                                                    </Stack>
                                                 </Paper>
                                             ))}
                                         </Stack>
