@@ -509,7 +509,6 @@ export default function TripAdd() {
     // New: resolved places + route alternatives for the map
     const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
     const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
-    const [routesLoading, setRoutesLoading] = useState(false)
     const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
     const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
@@ -661,7 +660,6 @@ export default function TripAdd() {
         if (!mapsApiKey) return
         if (destinations.length < 2) return
 
-        setRoutesLoading(true)
         try {
             const placeResults = await Promise.all(
                 destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d }))
@@ -778,7 +776,7 @@ export default function TripAdd() {
             })
             setNavigationPlans(plans)
         } finally {
-            setRoutesLoading(false)
+
         }
     }
 
@@ -999,77 +997,6 @@ export default function TripAdd() {
                                     onChange={(e) => setTransportationNotes(e.target.value)}
                                     placeholder="e.g. Prefer morning departures"
                                 />
-
-                                {/* Routes + Places + Map */}
-                                {mapsApiKey ? (
-                                    <APIProvider apiKey={mapsApiKey}>
-                                        <Stack spacing={2}>
-                                            {destinations.length < 2 && (
-                                                <Alert severity="info">Add at least two destinations to build routes.</Alert>
-                                            )}
-
-                                            {routesLoading && (
-                                                <Alert severity="info">Building route options...</Alert>
-                                            )}
-
-                                            {routesByLeg.length > 0 && (
-                                                <>
-                                                    <TripRouteMap
-                                                        loading={routesLoading}
-                                                        places={resolvedPlaces}
-                                                        legs={routesByLeg}
-                                                        selectedRouteByLeg={selectedRouteByLeg}
-                                                        mapId={mapId}
-                                                    />
-
-                                                    <Stack spacing={2}>
-                                                        {routesByLeg.map((leg, legIndex) => (
-                                                            <Paper
-                                                                key={`${leg.origin}-${leg.destination}`}
-                                                                elevation={0}
-                                                                sx={{ p: 2, borderRadius: 2, border: "1px solid rgba(47,65,86,0.12)" }}
-                                                            >
-                                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>
-                                                                    {leg.origin} → {leg.destination}
-                                                                </Typography>
-
-                                                                {(routeOptionsByLeg[legIndex] ?? []).length === 0 ? (
-                                                                    <Alert severity="warning">
-                                                                        No route alternatives returned for this leg. Check API enablement and billing.
-                                                                    </Alert>
-                                                                ) : (
-                                                                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                                                                        {(routeOptionsByLeg[legIndex] ?? []).map((r, routeIndex) => {
-                                                                            const selected = (selectedRouteByLeg[legIndex] ?? 0) === routeIndex
-                                                                            const miles = metersToMiles(r.distanceMeters)
-
-                                                                            return (
-                                                                                <Chip
-                                                                                    key={`${legIndex}-${routeIndex}`}
-                                                                                    label={`Option ${routeIndex + 1} • ${r.label} • ${miles.toFixed(1)} mi • ${r.duration} • ${toCurrency(r.estimatedCost)}`}
-                                                                                    color={selected ? "primary" : "default"}
-                                                                                    onClick={() =>
-                                                                                        setSelectedRouteByLeg((prev) => ({
-                                                                                            ...prev,
-                                                                                            [legIndex]: routeIndex
-                                                                                        }))
-                                                                                    }
-                                                                                    sx={{ mb: 1 }}
-                                                                                />
-                                                                            )
-                                                                        })}
-                                                                    </Stack>
-                                                                )}
-                                                            </Paper>
-                                                        ))}
-                                                    </Stack>
-                                                </>
-                                            )}
-                                        </Stack>
-                                    </APIProvider>
-                                ) : (
-                                    <Alert severity="info">Add VITE_GOOGLE_API_KEY to enable Places + Routes + map rendering.</Alert>
-                                )}
 
                                 {/* Flights */}
                                 {transportMode === "flight" && (
