@@ -3,10 +3,10 @@ import {
     Alert,
     Box,
     Button,
-    Chip,
     Divider,
     MenuItem,
     Paper,
+    IconButton,
     Stack,
     Step,
     StepLabel,
@@ -14,6 +14,7 @@ import {
     TextField,
     Typography
 } from "@mui/material"
+import DragIndicatorIcon from "@mui/icons-material/DragIndicator"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
 import Page from "../components/Page"
@@ -600,6 +601,16 @@ export default function TripAdd() {
         setDestinations((prev) => prev.filter((d) => d !== city))
     }
 
+    function moveDestination(fromIdx: number, toIdx: number) {
+        if (fromIdx === toIdx || toIdx < 0 || toIdx >= destinations.length) return
+        setDestinations((prev) => {
+            const next = [...prev]
+            const [item] = next.splice(fromIdx, 1)
+            next.splice(toIdx, 0, item)
+            return next
+        })
+    }
+
     async function fetchFlights() {
         if (!startDate || !endDate || !transportOriginInput.trim() || !transportDestinationInput.trim()) return
 
@@ -623,7 +634,11 @@ export default function TripAdd() {
                     airline: option.title,
                     route: firstSegment?.summary ?? `${result.origin.airport.code} → ${result.destination.airport.code}`,
                     price: option.totalPriceUsd ?? 0,
-                    source: "serpapi"
+                    source: "serpapi",
+                    departureDate: startDate,
+                    departureTime: "Time varies",
+                    arrivalTime: "See carrier",
+                    details: option.segments.map((seg) => `${seg.mode.toUpperCase()}: ${seg.summary}`).join(" • ")
                 }
             })
 
@@ -943,19 +958,49 @@ export default function TripAdd() {
                                         placeholder="Paris or PAR"
                                         value={destinationInput}
                                         onChange={(e) => setDestinationInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                e.preventDefault()
+                                                addDestination()
+                                            }
+                                        }}
                                         fullWidth
                                     />
                                     <Button variant="contained" onClick={addDestination}>Add</Button>
                                 </Stack>
 
-                                <Stack direction="row" spacing={1} flexWrap="wrap">
-                                    {destinations.map((destination) => (
-                                        <Chip
-                                            key={destination}
-                                            label={destination}
-                                            onDelete={() => removeDestination(destination)}
-                                            sx={{ mb: 1 }}
-                                        />
+                                <Stack spacing={1}>
+                                    {destinations.map((destination, idx) => (
+                                        <Paper
+                                            key={`${destination}-${idx}`}
+                                            elevation={0}
+                                            draggable
+                                            onDragStart={(e) => {
+                                                e.dataTransfer.setData("text/plain", String(idx))
+                                            }}
+                                            onDragOver={(e) => e.preventDefault()}
+                                            onDrop={(e) => {
+                                                const from = Number(e.dataTransfer.getData("text/plain"))
+                                                if (!Number.isNaN(from)) moveDestination(from, idx)
+                                            }}
+                                            sx={{
+                                                p: 1.25,
+                                                borderRadius: 2,
+                                                border: "1px solid rgba(47,65,86,0.15)",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "space-between",
+                                                gap: 1
+                                            }}
+                                        >
+                                            <Stack direction="row" spacing={1} alignItems="center">
+                                                <DragIndicatorIcon fontSize="small" color="disabled" />
+                                                <Typography sx={{ fontWeight: 600 }}>{idx + 1}. {destination}</Typography>
+                                            </Stack>
+                                            <IconButton size="small" onClick={() => removeDestination(destination)}>
+                                                ×
+                                            </IconButton>
+                                        </Paper>
                                     ))}
                                 </Stack>
 
@@ -1005,14 +1050,12 @@ export default function TripAdd() {
                                             label="Origin (city or airport code)"
                                             value={transportOriginInput}
                                             onChange={(e) => setTransportOriginInput(e.target.value)}
-                                            onBlur={() => void resolveAirportInput("origin")}
                                             placeholder="e.g. Philadelphia or PHL"
                                         />
                                         <TextField
                                             label="Destination (city or airport code)"
                                             value={transportDestinationInput}
                                             onChange={(e) => setTransportDestinationInput(e.target.value)}
-                                            onBlur={() => void resolveAirportInput("destination")}
                                             placeholder="e.g. Paris or CDG"
                                         />
 
@@ -1084,6 +1127,13 @@ export default function TripAdd() {
                                                     <Typography sx={{ fontWeight: 700 }}>{flight.airline}</Typography>
                                                     <Typography color="text.secondary">{flight.route}</Typography>
                                                     <Typography>{toCurrency(flight.price)}</Typography>
+                                                    {flight.departureDate && (
+                                                        <Typography variant="body2" color="text.secondary">
+                                                            {flight.departureDate} {flight.departureTime ? `• ${flight.departureTime}` : ""}
+                                                            {flight.arrivalTime ? ` → ${flight.arrivalTime}` : ""}
+                                                        </Typography>
+                                                    )}
+                                                    {flight.details && <Typography variant="body2" color="text.secondary">{flight.details}</Typography>}
                                                 </Paper>
                                             ))}
                                         </Stack>

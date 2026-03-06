@@ -13,6 +13,10 @@ export type FlightOption = {
   route: string;
   price: number;
   source: "serpapi" | "mock";
+  departureDate?: string;
+  departureTime?: string;
+  arrivalTime?: string;
+  details?: string;
 };
 
 export type StayOption = {
