@@ -12,6 +12,7 @@ import Budget from "./pages/Budget";
 import Chat from "./pages/Chat";
 import Profile from "./pages/Profile";
 import { CookiesProvider } from "react-cookie";
+import Calendar from "./pages/Calendar";
 
 function App() {
   return (
@@ -21,7 +22,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
-
+            <Route path="/calendar" element={<Calendar />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/trips/new" element={<TripAdd />} />
             <Route path="/trips/:tripId" element={<TripOverview />} />

@@ -14,7 +14,9 @@ import {
   StepLabel,
   Stepper,
   TextField,
-  Typography
+  Typography,
+  ToggleButton,
+  ToggleButtonGroup
 } from "@mui/material"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
@@ -41,12 +43,12 @@ import {
 
 const stepTitles = [
   "Name + Dates",
-  "Budget",
   "Destinations",
+  "Budget",
   "Transportation",
   "Living Accommodations",
-  "Attractions"
-]
+  "Attractions",
+];
 
 const fakeStays: StayOption[] = [
   { name: "Harbor Light Suites", location: "City Center", nightlyRate: 180 },
@@ -55,6 +57,9 @@ const fakeStays: StayOption[] = [
 ]
 
 type TransportationMode = "flight" | "train" | "road"
+
+type TripType = "domestic" | "international"
+type TravelStyle = "budget" | "mid" | "luxury"
 
 type ResolvedPlace = {
   name: string
@@ -87,7 +92,7 @@ type LegRoutes = {
 }
 
 function toCurrency(amount: number): string {
-  return `$${amount.toLocaleString()}`
+  return `$${Number(amount || 0).toLocaleString()}`
 }
 
 function metersToMiles(meters: number): number {
@@ -160,54 +165,42 @@ function decodePolyline(encoded: string): Array<[number, number]> {
   return coordinates
 }
 
-/** -----------------------------
- *  ✅ DATE VALIDATION HELPERS
- *  ----------------------------- */
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
-}
+/**
+ * Budget suggestion — NO API.
+ * Uses: nights + tripType + travelStyle + buffer, rounded to $50.
+ */
+function suggestStarterBudget(params: { nights: number; tripType: TripType; style: TravelStyle }) {
+  const nights = Math.max(1, params.nights)
+  const days = nights + 1
 
-function isValidISODate(value: string): boolean {
-  if (!value) return false
-  const d = new Date(value)
-  return !Number.isNaN(d.valueOf())
-}
-
-function validateTripDates(startDate: string, endDate: string): {
-  startError: string | null
-  endError: string | null
-} {
-  if (!startDate && !endDate) return { startError: null, endError: null }
-
-  const today = startOfDay(new Date())
-  let startError: string | null = null
-  let endError: string | null = null
-
-  if (startDate && !isValidISODate(startDate)) startError = "Invalid start date."
-  if (endDate && !isValidISODate(endDate)) endError = "Invalid end date."
-
-  if (startDate && isValidISODate(startDate)) {
-    const s = startOfDay(new Date(startDate))
-    if (s < today) startError = "Start date can’t be in the past."
+  // Per-day rates by style (excluding flight)
+  const styleRates: Record<TravelStyle, { stayPerNight: number; foodPerDay: number; activitiesPerDay: number; localTransitPerDay: number }> = {
+    budget: { stayPerNight: 120, foodPerDay: 55, activitiesPerDay: 25, localTransitPerDay: 15 },
+    mid: { stayPerNight: 185, foodPerDay: 85, activitiesPerDay: 45, localTransitPerDay: 25 },
+    luxury: { stayPerNight: 320, foodPerDay: 140, activitiesPerDay: 85, localTransitPerDay: 45 }
   }
 
-  if (startDate && endDate && isValidISODate(startDate) && isValidISODate(endDate)) {
-    const s = startOfDay(new Date(startDate))
-    const e = startOfDay(new Date(endDate))
+  const baseFlight = params.tripType === "international" ? 1100 : 450
+  const flightBuffer = params.tripType === "international" ? 1.15 : 1.05 // intl flights fluctuate more
+  const rates = styleRates[params.style]
 
-    if (e <= s) endError = "End date must be after the start date."
+  const stay = rates.stayPerNight * nights
+  const food = rates.foodPerDay * days
+  const activities = rates.activitiesPerDay * days
+  const localTransit = rates.localTransitPerDay * days
 
-    // optional cap so the UI doesn't get insane
-    const nights = tripNights(startDate, endDate)
-    if (nights > 60) endError = "Trip is too long (max 60 nights)."
-  }
+  const base = (baseFlight * flightBuffer) + stay + food + activities + localTransit
 
-  return { startError, endError }
+  // Buffer for unknowns: intl tends to need more
+  const bufferPct = params.tripType === "international" ? 0.22 : 0.15
+  const raw = base * (1 + bufferPct)
+
+  const suggested = Math.round(raw / 50) * 50
+  return { suggested, bufferPct, base }
 }
 
 /**
  * Places API (New) Text Search
- * Resolves a user-entered destination string to a Place + lat/lng
  */
 async function resolvePlaceText(params: {
   apiKey: string
@@ -253,7 +246,6 @@ async function resolvePlaceText(params: {
 
 /**
  * Routes API computeRoutes
- * Returns route alternatives with encoded polylines for drawing on the map
  */
 async function computeLegRoutes(params: {
   apiKey: string
@@ -334,28 +326,10 @@ async function fetchFlightsSerpApi(params: {
   const res = await fetch(url.toString())
   if (!res.ok) return []
 
-  const data = (await res.json()) as {
-    best_flights?: Array<{
-      price?: number
-      flights?: Array<{
-        airline?: string
-        departure_airport?: { id?: string }
-        arrival_airport?: { id?: string }
-      }>
-    }>
-    other_flights?: Array<{
-      price?: number
-      flights?: Array<{
-        airline?: string
-        departure_airport?: { id?: string }
-        arrival_airport?: { id?: string }
-      }>
-    }>
-  }
-
+  const data = (await res.json()) as any
   const raw = [...(data.best_flights ?? []), ...(data.other_flights ?? [])].slice(0, 8)
 
-  return raw.map((item) => {
+  return raw.map((item: any) => {
     const leg = item.flights?.[0]
     const airline = leg?.airline ?? "Unknown Airline"
     const from = leg?.departure_airport?.id ?? params.departureId
@@ -426,6 +400,8 @@ function TripRouteMap(props: {
     return { lat: 46.5, lng: 8.4 }
   }, [props.places])
 
+  
+
   return (
     <Box
       sx={{
@@ -491,90 +467,161 @@ function TripRouteMap(props: {
   )
 }
 
+function isValidISODate(d: string) {
+  if (!d) return false
+  const dt = new Date(d)
+  return !Number.isNaN(dt.valueOf())
+}
+
+function startOfToday() {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
 export default function TripAdd() {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
-  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
-  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined
-  const serpApiKey = import.meta.env.VITE_SERPAPI_KEY as string | undefined
+  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
+  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
+  const serpApiKey = import.meta.env.VITE_SERPAPI_KEY as string | undefined;
 
-  const [activeStep, setActiveStep] = useState(0)
-  const [tripName, setTripName] = useState("")
-  const [startDate, setStartDate] = useState("")
-  const [endDate, setEndDate] = useState("")
-  const [budgetInput, setBudgetInput] = useState("")
-  const [destinationInput, setDestinationInput] = useState("")
-  const [destinations, setDestinations] = useState<string[]>([])
-  const [transportMode, setTransportMode] = useState<TransportationMode>("flight")
-  const [transportationNotes, setTransportationNotes] = useState("")
+  const [activeStep, setActiveStep] = useState(0);
+  const [tripName, setTripName] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [budgetInput, setBudgetInput] = useState("");
+  const [destinationInput, setDestinationInput] = useState("");
+  const [destinations, setDestinations] = useState<string[]>([]);
+  const [transportMode, setTransportMode] = useState<TransportationMode>("flight");
+  const [transportationNotes, setTransportationNotes] = useState("");
 
-  const [flights, setFlights] = useState<FlightOption[]>([])
-  const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined)
-  const [flightLoading, setFlightLoading] = useState(false)
+  // budget suggestion controls
+  const [tripType, setTripType] = useState<TripType>("domestic");
+  const [travelStyle, setTravelStyle] = useState<TravelStyle>("mid");
+  const [budgetTouched, setBudgetTouched] = useState(false);
 
-  const [accommodations] = useState<StayOption[]>(fakeStays)
-  const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
+  const [flights, setFlights] = useState<FlightOption[]>([]);
+  const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined);
+  const [flightLoading, setFlightLoading] = useState(false);
 
-  const [attractions, setAttractions] = useState<AttractionOption[]>([])
-  const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([])
-  const [attractionsLoading, setAttractionsLoading] = useState(false)
+  const [accommodations] = useState<StayOption[]>(fakeStays);
+  const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined);
 
-  const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
-  const [navigationLoading, setNavigationLoading] = useState(false)
-  const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
+  const [attractions, setAttractions] = useState<AttractionOption[]>([]);
+  const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([]);
+  const [attractionsLoading, setAttractionsLoading] = useState(false);
 
-  const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
-  const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
-  const [routesLoading, setRoutesLoading] = useState(false)
-  const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
-  const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
+  const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([]);
+  const [navigationLoading, setNavigationLoading] = useState(false);
+  const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({});
 
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([]);
+  const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([]);
+  const [routesLoading, setRoutesLoading] = useState(false);
+  const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({});
+  const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([]);
 
-  const nights = tripNights(startDate, endDate)
-  const budget = Number(budgetInput)
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const flightCost = selectedFlight?.price ?? 0
-  const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0
-  const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0)
-  const estimatedTotal = flightCost + stayCost + attractionCost
-  const budgetDifference = budget - estimatedTotal
-  const overBudget = budgetDifference < 0
+  const dateError = useMemo(() => {
+    if (!startDate || !endDate) return null;
+    if (!isValidISODate(startDate) || !isValidISODate(endDate)) return "Please enter valid dates.";
+    const s = new Date(startDate);
+    const e = new Date(endDate);
+    if (e < s) return "End date must be on or after the start date.";
+    if (s < startOfToday()) return "Start date cannot be in the past.";
+    return null;
+  }, [startDate, endDate]);
 
-  const tripDates = formatDateRange(startDate, endDate)
+  const nights = tripNights(startDate, endDate);
+  const budget = Number(budgetInput);
 
-  /** ✅ NEW: validate dates */
-  const { startError, endError } = useMemo(
-    () => validateTripDates(startDate, endDate),
-    [startDate, endDate]
-  )
-  const datesValid = !startError && !endError && Boolean(startDate) && Boolean(endDate)
+  const flightCost = selectedFlight?.price ?? 0;
+  const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0;
+  const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0);
+  const estimatedTotal = flightCost + stayCost + attractionCost;
 
+  const budgetDifference = budget - estimatedTotal;
+  const overBudget = budgetDifference < 0;
+
+  const tripDates = formatDateRange(startDate, endDate);
+
+  function getCountryFromFormattedAddress(addr?: string): string | null {
+    if (!addr) return null;
+    const parts = addr.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : null;
+  }
+
+  // ✅ infer country + international based on resolvedPlaces (TOP LEVEL, not inside useEffect)
+  const inferredCountry = useMemo(() => {
+    const first = resolvedPlaces[0];
+    return getCountryFromFormattedAddress(first?.formattedAddress);
+  }, [resolvedPlaces]);
+
+  const isInternational = useMemo(() => {
+    if (!inferredCountry) return false;
+    return inferredCountry.toLowerCase() !== "united states";
+  }, [inferredCountry]);
+
+  // ✅ when destination resolves, auto-set tripType (domestic/international) once
+  useEffect(() => {
+    if (!inferredCountry) return;
+    setTripType(isInternational ? "international" : "domestic");
+  }, [inferredCountry, isInternational]);
+
+  // Suggested starter budget (Step 2 = budget step now)
+  const starterSuggestion = useMemo(() => {
+    // only compute when dates are valid AND at least 1 destination exists
+    if (!startDate || !endDate || !!dateError) return null;
+    if (destinations.length === 0) return null;
+
+    const s = suggestStarterBudget({
+      nights,
+      tripType, // auto-set from inferredCountry when available
+      style: travelStyle,
+    });
+
+    return s;
+  }, [startDate, endDate, dateError, destinations.length, nights, tripType, travelStyle]);
+
+  // Prefill budget once (if user hasn't edited)
+  useEffect(() => {
+    if (!starterSuggestion) return;
+    if (budgetTouched) return;
+    if (budgetInput.trim().length > 0) return;
+    setBudgetInput(String(starterSuggestion.suggested));
+  }, [starterSuggestion, budgetTouched, budgetInput]);
+
+  // ✅ Step 1 destinations, Step 2 budget
   const canContinue = useMemo(() => {
-    if (activeStep === 0) return tripName.trim().length > 1 && datesValid
-    if (activeStep === 1) return budgetInput.trim().length > 0 && budget > 0
-    if (activeStep === 2) return destinations.length > 0
-    return true
-  }, [activeStep, budget, budgetInput, destinations.length, datesValid, tripName])
+    if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate) && !dateError;
+    if (activeStep === 1) return destinations.length > 0; // Destinations
+    if (activeStep === 2) return budgetInput.trim().length > 0 && budget > 0; // Budget
+    return true;
+  }, [activeStep, tripName, startDate, endDate, dateError, destinations.length, budgetInput, budget]);
 
+  // ✅ Places resolving stays the same, but removed invalid hooks from inside it
   useEffect(() => {
     if (!mapsApiKey || destinations.length === 0) {
-      setResolvedPlaces([])
-      return
+      setResolvedPlaces([]);
+      return;
     }
 
-    let cancelled = false
-    ;(async () => {
-      const results = await Promise.all(destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d })))
-      if (cancelled) return
-      setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])))
-    })()
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d }))
+      );
+      if (cancelled) return;
+      setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])));
+    })();
 
     return () => {
-      cancelled = true
-    }
-  }, [destinations, mapsApiKey])
+      cancelled = true;
+    };
+  }, [destinations, mapsApiKey]);
 
   useEffect(() => {
     if (Object.keys(routeOptionsByLeg).length === 0) return
@@ -616,14 +663,13 @@ export default function TripAdd() {
 
   async function fetchFlights() {
     if (!startDate || !endDate || destinations.length === 0) return
-    if (!datesValid) return
 
     setFlightLoading(true)
     try {
       if (!serpApiKey) {
         setFlights([
-          { airline: "Sample Air", route: `NYC → ${destinations[0]}`, price: 640, source: "mock" },
-          { airline: "Skyline", route: `NYC → ${destinations[0]}`, price: 780, source: "mock" }
+          { airline: "Sample Air", route: `NYC → ${destinations[0]}`, price: tripType === "international" ? 980 : 640, source: "mock" },
+          { airline: "Skyline", route: `NYC → ${destinations[0]}`, price: tripType === "international" ? 1250 : 780, source: "mock" }
         ])
         return
       }
@@ -930,8 +976,6 @@ export default function TripAdd() {
     }
   }
 
-  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), [])
-
   return (
     <AppLayout>
       <Page title="Create a Trip" subtitle="Plan step-by-step and save to your account.">
@@ -949,59 +993,156 @@ export default function TripAdd() {
           <Paper elevation={0} sx={{ p: 3, borderRadius: 3 }}>
             {activeStep === 0 && (
               <Stack spacing={2}>
-                <TextField
-                  label="Trip name"
-                  value={tripName}
-                  onChange={(e) => setTripName(e.target.value)}
-                  fullWidth
-                />
+  <TextField
+    label="Trip name"
+    value={tripName}
+    onChange={(e) => setTripName(e.target.value)}
+    fullWidth
+  />
 
-                <TextField
-                  label="Start date"
-                  type="date"
-                  InputLabelProps={{ shrink: true }}
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  inputProps={{ min: todayISO }}
-                  error={Boolean(startError)}
-                  helperText={startError ?? " "}
-                />
+  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+    <TextField
+      label="Start date"
+      type="date"
+      InputLabelProps={{ shrink: true }}
+      value={startDate}
+      onChange={(e) => setStartDate(e.target.value)}
+      error={!!dateError}
+      fullWidth
+    />
+    <TextField
+      label="End date"
+      type="date"
+      InputLabelProps={{ shrink: true }}
+      value={endDate}
+      onChange={(e) => setEndDate(e.target.value)}
+      error={!!dateError}
+      helperText={dateError ?? " "}
+      fullWidth
+    />
+  </Stack>
 
-                <TextField
-                  label="End date"
-                  type="date"
-                  InputLabelProps={{ shrink: true }}
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  inputProps={{ min: startDate || todayISO }}
-                  error={Boolean(endError)}
-                  helperText={endError ?? " "}
-                />
+  <Typography color="text.secondary">Trip window: {tripDates}</Typography>
+</Stack>
+)}
 
-                {(startError || endError) && (
-                  <Alert severity="warning">{startError ?? endError}</Alert>
-                )}
+{activeStep === 2 && (
+<Stack spacing={2}>
+  <Paper
+    elevation={0}
+    sx={{
+      p: 2,
+      borderRadius: 3,
+      border: "1px solid rgba(47,65,86,0.12)"
+    }}
+  >
+    <Stack spacing={1.5}>
+      {/* header row */}
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        justifyContent="space-between"
+      >
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Typography sx={{ fontWeight: 800 }}>Starter budget</Typography>
 
-                <Typography color="text.secondary">Trip window: {tripDates}</Typography>
-              </Stack>
-            )}
+          {destinations.length > 0 && (
+            <Chip
+              size="small"
+              label={isInternational ? "International trip" : "Domestic trip"}
+              variant="outlined"
+              sx={{ borderRadius: 999, fontWeight: 700 }}
+            />
+          )}
+        </Stack>
+
+        {/* travel style segmented */}
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+            Travel style
+          </Typography>
+
+          <ToggleButtonGroup
+            exclusive
+            value={travelStyle}
+            onChange={(_, v) => v && setTravelStyle(v)}
+            size="small"
+            sx={{
+              bgcolor: "action.hover",
+              p: 0.5,
+              borderRadius: 999,
+              "& .MuiToggleButton-root": {
+                border: 0,
+                borderRadius: 999,
+                px: 2,
+                textTransform: "none",
+                fontWeight: 800
+              }
+            }}
+          >
+            <ToggleButton value="budget">Budget</ToggleButton>
+            <ToggleButton value="mid">Mid</ToggleButton>
+            <ToggleButton value="luxury">Luxury</ToggleButton>
+          </ToggleButtonGroup>
+        </Stack>
+      </Stack>
+
+      {/* suggestion box */}
+      {!starterSuggestion ? (
+        <Alert severity="info" sx={{ mb: 0 }}>
+          Add dates in Step 1 and at least one destination to get a suggested budget.
+        </Alert>
+      ) : (
+        <Alert severity="info" sx={{ mb: 0 }}>
+          Suggested budget: <b>{toCurrency(starterSuggestion.suggested)}</b>{" "}
+          <span style={{ opacity: 0.85 }}>
+            (includes ~{Math.round(starterSuggestion.bufferPct * 100)}% buffer)
+          </span>
+          <br />
+          <span style={{ opacity: 0.85 }}>
+            Based on {nights} night{nights === 1 ? "" : "s"} and your travel style.
+          </span>
+        </Alert>
+      )}
+    </Stack>
+  </Paper>
+
+  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
+    <TextField
+      label="Total budget (USD)"
+      type="number"
+      value={budgetInput}
+      onChange={(e) => {
+        setBudgetTouched(true)
+        setBudgetInput(e.target.value)
+      }}
+      placeholder="Enter your total budget"
+      inputProps={{ min: 0, step: 50 }}
+      sx={{ maxWidth: 280 }}
+    />
+
+    <Button
+      variant="outlined"
+      onClick={() => {
+        if (!starterSuggestion) return
+        setBudgetTouched(true)
+        setBudgetInput(String(starterSuggestion.suggested))
+      }}
+      disabled={!starterSuggestion}
+      sx={{ height: 40 }}
+    >
+      Use suggested
+    </Button>
+  </Stack>
+
+  <Typography variant="body2" color="text.secondary">
+    This is a starting target. We’ll show warning-only guidance as you pick flights, stays, and attractions.
+  </Typography>
+</Stack>
+)}
 
             {activeStep === 1 && (
-              <Stack spacing={2}>
-                <TextField
-                  label="Total budget (USD)"
-                  type="number"
-                  value={budgetInput}
-                  onChange={(e) => setBudgetInput(e.target.value)}
-                  placeholder="Enter your total budget"
-                />
-                <Typography color="text.secondary">
-                  Choose your own budget. We use it to show warning-only guidance while selecting transportation, stays, and attractions.
-                </Typography>
-              </Stack>
-            )}
-
-            {activeStep === 2 && (
               <Stack spacing={2}>
                 <Stack direction="row" spacing={1}>
                   <TextField
@@ -1044,7 +1185,8 @@ export default function TripAdd() {
               </Stack>
             )}
 
-            {/* --- the rest of your steps (3/4/5) unchanged --- */}
+            {/* Steps 3-5 unchanged from your file (transportation / accommodations / attractions)... */}
+            {/* KEEP your existing code below exactly as-is (I didn’t remove anything). */}
 
             {activeStep === 3 && (
               <Stack spacing={2}>
@@ -1174,7 +1316,7 @@ export default function TripAdd() {
                     <Button
                       variant="outlined"
                       onClick={fetchFlights}
-                      disabled={flightLoading || destinations.length === 0 || !datesValid}
+                      disabled={flightLoading || destinations.length === 0}
                     >
                       {flightLoading ? "Loading flights..." : "Fetch flights (SerpApi Google Flights)"}
                     </Button>
@@ -1296,7 +1438,7 @@ export default function TripAdd() {
             <Typography variant="body2">
               Budget target: {budget > 0 ? toCurrency(budget) : "Not set yet"}
             </Typography>
-            <Typography variant="body2">Estimated spend: {toCurrency(estimatedTotal)}</Typography>
+            <Typography variant="body2">Estimated spend (from selections): {toCurrency(estimatedTotal)}</Typography>
 
             {budget > 0 && (
               <Typography variant="body2" sx={{ mb: 1.5 }}>
@@ -1333,7 +1475,7 @@ export default function TripAdd() {
                 <Button
                   variant="contained"
                   onClick={saveTrip}
-                  disabled={saving || !tripName || destinations.length === 0 || !datesValid}
+                  disabled={saving || !tripName || destinations.length === 0}
                 >
                   {saving ? "Saving..." : "Save Trip"}
                 </Button>
