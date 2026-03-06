@@ -123,15 +123,42 @@ export type ItineraryAttraction = {
   location?: string;
 };
 
+export type ItineraryEventType =
+  | "flight"
+  | "stay"
+  | "attraction"
+  | "food"
+  | "local"
+  | "transport"
+  | "custom";
+
+export type ItineraryEventSource = "auto" | "user";
+
 export type ItineraryEvent = {
   id: string; // frontend-friendly id (uuid)
-  dayIndex: number; // which day this event belongs to
-  startTime?: string; // "09:00"
-  endTime?: string; // "10:30"
+
   title: string;
   description?: string;
   location?: string;
   cost?: number;
+
+  /**
+   * ✅ Calendar-friendly timestamps (recommended)
+   * Use these for FullCalendar / calendar UI
+   */
+  startISO: string; // e.g. "2026-04-10T09:00:00.000Z" or local ISO without Z
+  endISO?: string;
+
+  type?: ItineraryEventType;
+  source?: ItineraryEventSource;
+
+  /**
+   * ⚠️ Legacy fields (optional) — keep so older saved trips don't break.
+   * You can remove these later after a migration.
+   */
+  dayIndex?: number; // which day this event belongs to (legacy)
+  startTime?: string; // "09:00" (legacy)
+  endTime?: string; // "10:30" (legacy)
 };
 
 export type ItineraryDay = {
@@ -146,7 +173,7 @@ export type Itinerary = {
   updatedAt: string;
 };
 
-// ===== Trip Type (THIS IS WHAT YOU WERE MISSING) =====
+// ===== Trip Type =====
 
 export interface Trip {
   _id?: ObjectId;

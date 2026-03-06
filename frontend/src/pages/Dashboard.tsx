@@ -125,10 +125,15 @@ export default function Dashboard() {
         title="Your Trips"
         subtitle="Create a new trip or jump back into planning."
         right={
-          <Button component={RouterLink} to="/trips/new" variant="contained">
-            + New Trip
-          </Button>
-        }
+  <Stack direction="row" spacing={1}>
+    <Button component={RouterLink} to="/calendar" variant="outlined">
+      Calendar
+    </Button>
+    <Button component={RouterLink} to="/trips/new" variant="contained">
+      + New Trip
+    </Button>
+  </Stack>
+}
       >
         <Container maxWidth="lg" disableGutters>
           {loadError && (

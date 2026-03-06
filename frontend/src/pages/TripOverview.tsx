@@ -12,17 +12,35 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 function toCurrency(amount: number): string {
   return `$${amount.toLocaleString()}`;
 }
+function getBudgetNumber(t: any): number {
+  const b = t?.budget;
 
+  // old shape (number)
+  if (typeof b === "number") return b;
+
+  // new shape (Budget object)
+  if (b && typeof b === "object") {
+    // prefer computed planned total if present
+    if (typeof b?.computed?.plannedTotal === "number") return b.computed.plannedTotal;
+    if (typeof b?.totalBudget === "number") return b.totalBudget;
+    if (typeof b?.dailyBudget === "number" && typeof b?.computed?.tripDays === "number") {
+      return b.dailyBudget * b.computed.tripDays;
+    }
+  }
+
+  return 0;
+}
 function mapApiTripToPlannedTrip(t: any): PlannedTrip {
-  // Safe mapping — adjust if your backend uses different field names
   return {
     id: t._id ?? t.id,
     name: t.title ?? t.name ?? "Untitled Trip",
     startDate: t.startDate,
     endDate: t.endDate,
-    budget: Number(t.budget ?? 0),
-    estimatedTotal: Number(t.estimatedTotal ?? t.budget ?? 0),
-    destinations: Array.isArray(t.destinations) ? t.destinations : [],
+    budget: getBudgetNumber(t),
+    estimatedTotal: Number(t.estimatedTotal ?? 0),
+    destinations: Array.isArray(t.destinations)
+      ? t.destinations
+      : (t.destination ? [t.destination] : []),
   } as PlannedTrip;
 }
 

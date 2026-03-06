@@ -2,15 +2,19 @@ import express, { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { connectToDatabase, getCollection } from "../config/database";
 import type { Trip, Budget, Itinerary } from "../types";
+<<<<<<< HEAD
 import { getSession } from "../sessionStore";
 
+=======
+import { getSession } from "../SessionStore";
+import calendarRouter from "./calendar"
+>>>>>>> a67dfc2 (Add trip calendar month and week views and budget feature addition)
 const router = express.Router();
+
 
 function getParam(req: Request, name: string): string {
   const v = req.params?.[name];
-  if (typeof v !== "string" || v.length === 0) {
-    throw new Error(`Missing route param: ${name}`);
-  }
+  if (typeof v !== "string" || v.length === 0) throw new Error(`Missing route param: ${name}`);
   return v;
 }
 
@@ -35,6 +39,41 @@ function daysBetweenInclusive(startISO: string, endISO: string) {
   const ms = end.getTime() - start.getTime();
   const days = Math.floor(ms / (1000 * 60 * 60 * 24)) + 1;
   return Math.max(days, 1);
+}
+
+/**
+ * Your frontend sometimes sends budget as a NUMBER (simple target),
+ * but your backend types model budget as a structured Budget object.
+ *
+ * This normalizes:
+ *  - number -> Budget(method="total", totalBudget=number)
+ *  - object -> Budget
+ *  - undefined/null -> undefined
+ */
+function normalizeBudgetInput(input: any): Budget | undefined {
+  if (input == null) return undefined;
+
+  // number budget target
+  if (typeof input === "number") {
+    if (!Number.isFinite(input) || input < 0) throw new Error("budget must be a non-negative number");
+    const now = new Date().toISOString();
+    return {
+      currency: "USD",
+      method: "total",
+      totalBudget: input,
+      expenses: [],
+      updatedAt: now,
+    };
+  }
+
+  // structured budget
+  if (typeof input === "object") {
+    // very light validation; deeper validation can be added later
+    if (typeof input.method !== "string") throw new Error("budget.method is required");
+    return input as Budget;
+  }
+
+  throw new Error("Invalid budget payload");
 }
 
 function recalcBudget(startDate: string, endDate: string, budget?: Budget): Budget | undefined {
@@ -67,26 +106,37 @@ async function tripsCol() {
   return getCollection<Trip>("trips");
 }
 
-// CREATE trip (this is the "save" endpoint)
+// CREATE trip
 router.post("/", async (req: Request, res: Response) => {
   try {
     const userId = requireUserId(req);
-    const { title, destination, startDate, endDate, notes, budget } = req.body;
 
-    if (!title || !destination || !startDate || !endDate) {
-      return res.status(400).json({ error: "title, destination, startDate, endDate required" });
+    const { title, destination, destinations, startDate, endDate, notes } = req.body;
+
+    const destList = Array.isArray(destinations) ? destinations.filter(Boolean) : [];
+    const primaryDestination = (typeof destination === "string" && destination.trim().length > 0)
+      ? destination.trim()
+      : (destList[0] ?? "");
+
+    if (!title || !primaryDestination || !startDate || !endDate) {
+      return res.status(400).json({ error: "title, destination(s), startDate, endDate required" });
     }
 
     const now = new Date().toISOString();
 
+    // normalize + compute budget (supports number OR object OR undefined)
+    const incomingBudget = normalizeBudgetInput(req.body?.budget);
+    const computedBudget = recalcBudget(startDate, endDate, incomingBudget);
+
     const trip: Trip = {
       userId,
       title,
-      destination,
+      destination: primaryDestination,
+      destinations: destList.length ? destList : [primaryDestination],
       startDate,
       endDate,
       notes,
-      budget: recalcBudget(startDate, endDate, budget),
+      budget: computedBudget,
       itinerary: req.body.itinerary ? ({ ...req.body.itinerary, updatedAt: now } as Itinerary) : undefined,
       createdAt: now,
       updatedAt: now,
@@ -98,7 +148,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     return res.status(201).json(saved);
   } catch (e: any) {
-    return res.status(401).json({ error: e.message ?? "Failed to create trip" });
+    return res.status(400).json({ error: e?.message ?? "Failed to create trip" });
   }
 });
 
@@ -130,37 +180,15 @@ router.get("/:id", async (req: Request, res: Response) => {
     return res.status(401).json({ error: e.message ?? "Failed to fetch trip" });
   }
 });
-// PATCH /api/trips/:id  (update budget, etc.)
-router.patch("/:id", async (req: Request, res: Response) => {
-  try {
-    const userId = requireUserId(req);
-    const id = toObjectId(getParam(req, "id"));
 
-    const { budget } = req.body ?? {};
-    if (budget !== undefined && (typeof budget !== "number" || budget < 0)) {
-      return res.status(400).json({ error: "budget must be a non-negative number" });
-    }
-
-    const trips = getCollection("trips");
-
-    const update: any = {};
-    if (budget !== undefined) update.budget = budget;
-
-    const result = await trips.updateOne(
-      { _id: id, userId }, // enforce ownership
-      { $set: update }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ error: "Trip not found" });
-    }
-
-    return res.json({ ok: true });
-  } catch (e: any) {
-    return res.status(400).json({ error: e?.message ?? "Failed to update trip" });
-  }
-});
-// PATCH trip (core fields)
+/**
+ * PATCH /api/trips/:id
+ * Supports updating:
+ *  - title, destination, destinations, startDate, endDate, notes
+ *  - budget (number OR Budget object)
+ *
+ * If dates change and budget exists, we recalc computed.
+ */
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
     const userId = requireUserId(req);
@@ -170,13 +198,41 @@ router.patch("/:id", async (req: Request, res: Response) => {
     const existing = await col.findOne({ _id, userId });
     if (!existing) return res.status(404).json({ error: "Trip not found" });
 
-    const allowed = ["title", "destination", "startDate", "endDate", "notes"] as const;
     const patch: any = {};
-    for (const k of allowed) if (req.body[k] !== undefined) patch[k] = req.body[k];
+
+    const allowed = ["title", "destination", "startDate", "endDate", "notes"] as const;
+    for (const k of allowed) {
+      if (req.body?.[k] !== undefined) patch[k] = req.body[k];
+    }
+
+    // destinations support
+    if (req.body?.destinations !== undefined) {
+      if (!Array.isArray(req.body.destinations)) {
+        return res.status(400).json({ error: "destinations must be an array of strings" });
+      }
+      const destList = req.body.destinations.filter(Boolean);
+      patch.destinations = destList;
+
+      // keep destination consistent if they didn’t explicitly set it
+      if (patch.destination === undefined && destList.length > 0) {
+        patch.destination = destList[0];
+      }
+    }
+
+    // budget supports number OR object
+    if (req.body?.budget !== undefined) {
+      const normalized = normalizeBudgetInput(req.body.budget);
+      patch.budget = normalized; // store as structured Budget
+    }
 
     const nextStart = patch.startDate ?? existing.startDate;
     const nextEnd = patch.endDate ?? existing.endDate;
-    const nextBudget = recalcBudget(nextStart, nextEnd, existing.budget);
+
+    // if we have a structured budget, keep computed fields consistent when dates or budget changed
+    let nextBudget: any = patch.budget ?? existing.budget;
+    if (nextBudget && typeof nextBudget === "object" && (patch.startDate || patch.endDate || patch.budget)) {
+      nextBudget = recalcBudget(nextStart, nextEnd, nextBudget as Budget);
+    }
 
     await col.updateOne(
       { _id, userId },
@@ -186,14 +242,11 @@ router.patch("/:id", async (req: Request, res: Response) => {
     const fresh = await col.findOne({ _id, userId });
     return res.json(fresh);
   } catch (e: any) {
-    return res.status(401).json({ error: e.message ?? "Failed to update trip" });
+    return res.status(400).json({ error: e.message ?? "Failed to update trip" });
   }
 });
 
-// PATCH itinerary
-// Supports BOTH payload shapes:
-//  A) { flights, selectedFlight, ... }  (flat)
-//  B) { itinerary: { flights, selectedFlight, ... } }  (nested)
+// PATCH itinerary (supports flat or nested)
 router.patch("/:id/itinerary", async (req: Request, res: Response) => {
   try {
     const userId = requireUserId(req);
@@ -208,7 +261,6 @@ router.patch("/:id/itinerary", async (req: Request, res: Response) => {
     const prev: Itinerary =
       trip.itinerary ?? ({ selectedAttractions: [], events: [], updatedAt: new Date().toISOString() } as any);
 
-    // Minimal guard: if events exists, ensure it's an array
     if (patch?.events !== undefined && !Array.isArray(patch.events)) {
       return res.status(400).json({ error: "itinerary.events must be an array" });
     }
