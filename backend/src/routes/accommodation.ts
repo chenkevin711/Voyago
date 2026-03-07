@@ -47,7 +47,8 @@ router.get("/", async (req: Request, res: Response) => {
             headers: {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": apiKey,
-                // Request only the fields being used to keep the payload small
+                // Request only the fields we actually use to keep the payload small
+                // and avoid unnecessary billing charges for unrequested field masks.
                 "X-Goog-FieldMask": [
                     "places.id",
                     "places.displayName",
@@ -56,10 +57,12 @@ router.get("/", async (req: Request, res: Response) => {
                     "places.rating",
                     "places.userRatingCount",
                     "places.location",
+                    "places.reviews",
                 ].join(","),
             },
             body: JSON.stringify({
                 textQuery: `hotels and lodging in ${destination}`,
+                // includedType filters results to the lodging category.
                 includedType: "lodging",
                 pageSize: limit,
                 languageCode: "en",
@@ -81,6 +84,13 @@ router.get("/", async (req: Request, res: Response) => {
             rating: place.rating,
             userRatingCount: place.userRatingCount,
             placeId: place.id,
+            reviews: (place.reviews ?? []).map((r) => ({
+                author: r.authorAttribution?.displayName ?? "Anonymous",
+                authorPhotoUri: r.authorAttribution?.photoUri,
+                rating: r.rating ?? 0,
+                text: r.text?.text ?? "",
+                relativeTime: r.relativePublishTimeDescription ?? "",
+            })),
             source: "google_places",
         }))
 

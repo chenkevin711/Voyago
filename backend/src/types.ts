@@ -182,6 +182,19 @@ export interface GooglePlace {
     userRatingCount?: number
     location?: { latitude?: number; longitude?: number }
     regularOpeningHours?: { openNow?: boolean }
+    reviews?: Array<{
+        name?: string
+        rating?: number
+        text?: { text?: string; languageCode?: string }
+        originalText?: { text?: string; languageCode?: string }
+        authorAttribution?: {
+            displayName?: string
+            uri?: string
+            photoUri?: string
+        }
+        relativePublishTimeDescription?: string
+        publishTime?: string
+    }>
 }
 
 export interface GooglePlacesTextSearchResponse {

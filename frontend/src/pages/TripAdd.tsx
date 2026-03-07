@@ -4,6 +4,7 @@ import {
     Box,
     Button,
     Chip,
+    Collapse,
     Divider,
     MenuItem,
     Paper,
@@ -54,6 +55,21 @@ const stepTitles = [
 
 
 type TransportationMode = "flight" | "train" | "road"
+
+type StayReview = {
+    author: string
+    authorPhotoUri?: string
+    rating: number
+    text: string
+    relativeTime: string
+}
+
+type StayOptionWithReviews = StayOption & {
+    rating?: number
+    userRatingCount?: number
+    placeId?: string
+    reviews: StayReview[]
+}
 
 type ResolvedPlace = {
     name: string
@@ -490,10 +506,11 @@ export default function TripAdd() {
     const [transportPlan, setTransportPlan] = useState<TransportPlanResponse | null>(null)
     const [transportError, setTransportError] = useState<string | null>(null)
 
-    const [accommodations, setAccommodations] = useState<StayOption[]>([])
+    const [accommodations, setAccommodations] = useState<StayOptionWithReviews[]>([])
     const [accommodationsLoading, setAccommodationsLoading] = useState(false)
     const [accommodationsError, setAccommodationsError] = useState<string | null>(null)
     const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
+    const [expandedAccommodation, setExpandedAccommodation] = useState<string | null>(null)
 
     const [attractions, setAttractions] = useState<AttractionOption[]>([])
     const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([])
@@ -805,20 +822,26 @@ export default function TripAdd() {
                     location: string
                     nightlyRate: number
                     rating?: number
+                    userRatingCount?: number
                     placeId?: string
+                    reviews: StayReview[]
                 }>
             }
 
-            const options: StayOption[] = data.results.map((r) => ({
+            const options: StayOptionWithReviews[] = data.results.map((r) => ({
                 name: r.name,
                 location: r.location,
                 nightlyRate: r.nightlyRate,
+                rating: r.rating,
+                userRatingCount: r.userRatingCount,
+                placeId: r.placeId,
+                reviews: r.reviews ?? [],
             }))
 
             setAccommodations(
                 options.length > 0
                     ? options
-                    : [{ name: "No results found", location: destinations[0], nightlyRate: 0 }]
+                    : [{ name: "No results found", location: destinations[0], nightlyRate: 0, reviews: [] }]
             )
         } catch (err) {
             const message = err instanceof Error ? err.message : "Unknown error"
@@ -1240,24 +1263,151 @@ export default function TripAdd() {
                                     </Typography>
                                 )}
 
-                                {accommodations.map((stay) => (
-                                    <Paper
-                                        key={stay.name}
-                                        elevation={0}
-                                        sx={{
-                                            p: 2,
-                                            borderRadius: 2,
-                                            border: selectedAccommodation?.name === stay.name ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
-                                            borderColor: selectedAccommodation?.name === stay.name ? "primary.main" : "rgba(47,65,86,0.15)",
-                                            cursor: "pointer"
-                                        }}
-                                        onClick={() => setSelectedAccommodation(stay)}
-                                    >
-                                        <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
-                                        <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
-                                        <Typography>{toCurrency(stay.nightlyRate)} / night × {nights} nights</Typography>
-                                    </Paper>
-                                ))}
+                                {accommodations.map((stay) => {
+                                    const isSelected = selectedAccommodation?.name === stay.name
+                                    const isExpanded = expandedAccommodation === stay.name
+
+                                    return (
+                                        <Paper
+                                            key={stay.name}
+                                            elevation={0}
+                                            sx={{
+                                                borderRadius: 2,
+                                                border: isSelected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
+                                                borderColor: isSelected ? "primary.main" : "rgba(47,65,86,0.15)",
+                                                overflow: "hidden"
+                                            }}
+                                        >
+                                            {/* ── Main card row ── */}
+                                            <Box
+                                                sx={{ p: 2, cursor: "pointer" }}
+                                                onClick={() => setSelectedAccommodation(stay)}
+                                            >
+                                                <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                                                    <Box>
+                                                        <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
+                                                        <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
+                                                        <Typography sx={{ mt: 0.5 }}>
+                                                            {toCurrency(stay.nightlyRate)} / night × {nights} nights
+                                                        </Typography>
+                                                    </Box>
+
+                                                    {/* Overall rating badge */}
+                                                    {stay.rating != null && (
+                                                        <Stack alignItems="center" spacing={0}>
+                                                            <Box
+                                                                sx={{
+                                                                    bgcolor: stay.rating >= 4.5 ? "success.main" : stay.rating >= 4 ? "primary.main" : "warning.main",
+                                                                    color: "#fff",
+                                                                    borderRadius: 1.5,
+                                                                    px: 1,
+                                                                    py: 0.25,
+                                                                    fontWeight: 700,
+                                                                    fontSize: "0.9rem",
+                                                                    minWidth: 40,
+                                                                    textAlign: "center"
+                                                                }}
+                                                            >
+                                                                {stay.rating.toFixed(1)}
+                                                            </Box>
+                                                            {stay.userRatingCount != null && (
+                                                                <Typography variant="caption" color="text.secondary">
+                                                                    {stay.userRatingCount.toLocaleString()} reviews
+                                                                </Typography>
+                                                            )}
+                                                        </Stack>
+                                                    )}
+                                                </Stack>
+                                            </Box>
+
+                                            {/* ── Reviews toggle ── */}
+                                            {stay.reviews.length > 0 && (
+                                                <>
+                                                    <Divider />
+                                                    <Box
+                                                        sx={{
+                                                            px: 2,
+                                                            py: 0.75,
+                                                            cursor: "pointer",
+                                                            display: "flex",
+                                                            alignItems: "center",
+                                                            gap: 0.5,
+                                                            bgcolor: "rgba(47,65,86,0.03)",
+                                                            "&:hover": { bgcolor: "rgba(47,65,86,0.07)" }
+                                                        }}
+                                                        onClick={() =>
+                                                            setExpandedAccommodation(isExpanded ? null : stay.name)
+                                                        }
+                                                    >
+                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                            {isExpanded ? "Hide" : "Show"} guest reviews ({stay.reviews.length})
+                                                        </Typography>
+                                                        <Typography variant="body2" color="text.secondary">
+                                                            {isExpanded ? "▲" : "▼"}
+                                                        </Typography>
+                                                    </Box>
+
+                                                    <Collapse in={isExpanded}>
+                                                        <Stack spacing={0} divider={<Divider />}>
+                                                            {stay.reviews.map((review, idx) => (
+                                                                <Box key={idx} sx={{ px: 2, py: 1.5 }}>
+                                                                    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                                                                        <Stack direction="row" alignItems="center" spacing={1}>
+                                                                            {/* Author avatar / photo */}
+                                                                            {review.authorPhotoUri ? (
+                                                                                <Box
+                                                                                    component="img"
+                                                                                    src={review.authorPhotoUri}
+                                                                                    alt={review.author}
+                                                                                    sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
+                                                                                />
+                                                                            ) : (
+                                                                                <Box
+                                                                                    sx={{
+                                                                                        width: 28, height: 28,
+                                                                                        borderRadius: "50%",
+                                                                                        bgcolor: "primary.light",
+                                                                                        display: "flex",
+                                                                                        alignItems: "center",
+                                                                                        justifyContent: "center",
+                                                                                        color: "#fff",
+                                                                                        fontSize: "0.75rem",
+                                                                                        fontWeight: 700
+                                                                                    }}
+                                                                                >
+                                                                                    {review.author.charAt(0).toUpperCase()}
+                                                                                </Box>
+                                                                            )}
+                                                                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                                {review.author}
+                                                                            </Typography>
+                                                                        </Stack>
+
+                                                                        <Stack direction="row" alignItems="center" spacing={1}>
+                                                                            {/* Star rating */}
+                                                                            <Typography variant="body2" sx={{ color: "#f59e0b", letterSpacing: "-1px" }}>
+                                                                                {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                                                                            </Typography>
+                                                                            <Typography variant="caption" color="text.secondary">
+                                                                                {review.relativeTime}
+                                                                            </Typography>
+                                                                        </Stack>
+                                                                    </Stack>
+
+                                                                    {review.text && (
+                                                                        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                                                                            {review.text}
+                                                                        </Typography>
+                                                                    )}
+                                                                </Box>
+                                                            ))}
+                                                        </Stack>
+                                                    </Collapse>
+                                                </>
+                                            )}
+                                        </Paper>
+                                    )
+                                })}
                             </Stack>
                         )}
 
