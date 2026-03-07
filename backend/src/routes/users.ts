@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import { ObjectId } from "mongodb";
 import { getCollection } from "../config/database";
 import { authorize } from "../middleware/authorize";
-import { tokenStorage } from "../routes/auth";
+import { getSession } from "../sessionStore";
 import { User, Relation } from "../types";
 
 const router: Router = express.Router();
@@ -17,14 +17,15 @@ function parseId(param: string | string[]): ObjectId | null {
 }
 
 /**
- * Helper: resolve username from token cookie to a User document
+ * Helper: resolve the current user's ObjectId directly from their session token.
+ * No DB round-trip needed — userId is stored in the session at login.
  */
-async function getUserFromReq(req: Request): Promise<User | null> {
+function getCurrentUserId(req: Request): ObjectId | null {
   const token = req.cookies?.token;
-  const username = tokenStorage[token];
-  if (!username) return null;
-  const usersCollection = getCollection<User>("users");
-  return usersCollection.findOne({ username });
+  if (!token) return null;
+  const session = getSession(token);
+  if (!session?.userId) return null;
+  return parseId(session.userId);
 }
 
 /**
@@ -37,8 +38,8 @@ async function getUserFromReq(req: Request): Promise<User | null> {
  */
 router.get("/search", authorize, async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -60,23 +61,21 @@ router.get("/search", authorize, async (req: Request, res: Response) => {
       .find({
         status: "blocked",
         $or: [
-          { user1_id: currentUser._id },
-          { user2_id: currentUser._id },
+          { user1_id: currentUserId },
+          { user2_id: currentUserId },
         ],
       })
       .toArray();
 
     const hiddenIds = blockRelations.map((r) =>
-      r.user1_id.equals(currentUser._id!) ? r.user2_id : r.user1_id
+      r.user1_id.equals(currentUserId) ? r.user2_id : r.user1_id
     );
 
     // Search by username — case-insensitive, partial match
     const users = await usersCollection
       .find({
         username: { $regex: q, $options: "i" },
-        _id: {
-          $nin: [currentUser._id!, ...hiddenIds],
-        },
+        _id: { $nin: [currentUserId, ...hiddenIds] },
       })
       .project({ password_hash: 0 })
       .limit(limit)
@@ -106,8 +105,8 @@ router.get("/search", authorize, async (req: Request, res: Response) => {
  */
 router.get("/:userId", authorize, async (req: Request, res: Response) => {
   try {
-    const currentUser = await getUserFromReq(req);
-    if (!currentUser) {
+    const currentUserId = getCurrentUserId(req);
+    if (!currentUserId) {
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
@@ -124,8 +123,8 @@ router.get("/:userId", authorize, async (req: Request, res: Response) => {
     const block = await relationsCollection.findOne({
       status: "blocked",
       $or: [
-        { user1_id: currentUser._id, user2_id: targetId },
-        { user1_id: targetId, user2_id: currentUser._id },
+        { user1_id: currentUserId, user2_id: targetId },
+        { user1_id: targetId, user2_id: currentUserId },
       ],
     });
 
@@ -148,8 +147,8 @@ router.get("/:userId", authorize, async (req: Request, res: Response) => {
     // Determine relation status between the two
     const relation = await relationsCollection.findOne({
       $or: [
-        { user1_id: currentUser._id, user2_id: targetId },
-        { user1_id: targetId, user2_id: currentUser._id },
+        { user1_id: currentUserId, user2_id: targetId },
+        { user1_id: targetId, user2_id: currentUserId },
       ],
     });
 
@@ -158,7 +157,7 @@ router.get("/:userId", authorize, async (req: Request, res: Response) => {
       if (relation.status === "accepted") {
         relationStatus = "accepted";
       } else if (relation.status === "pending") {
-        relationStatus = relation.user1_id.equals(currentUser._id!)
+        relationStatus = relation.user1_id.equals(currentUserId)
           ? "pending_sent"
           : "pending_received";
       }
