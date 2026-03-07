@@ -52,11 +52,6 @@ const stepTitles = [
     "Attractions"
 ]
 
-const fakeStays: StayOption[] = [
-    { name: "Harbor Light Suites", location: "City Center", nightlyRate: 180 },
-    { name: "Maple Boutique Stay", location: "Old Town", nightlyRate: 135 },
-    { name: "Voyager Residence", location: "Waterfront", nightlyRate: 220 }
-]
 
 type TransportationMode = "flight" | "train" | "road"
 
@@ -495,7 +490,9 @@ export default function TripAdd() {
     const [transportPlan, setTransportPlan] = useState<TransportPlanResponse | null>(null)
     const [transportError, setTransportError] = useState<string | null>(null)
 
-    const [accommodations] = useState<StayOption[]>(fakeStays)
+    const [accommodations, setAccommodations] = useState<StayOption[]>([])
+    const [accommodationsLoading, setAccommodationsLoading] = useState(false)
+    const [accommodationsError, setAccommodationsError] = useState<string | null>(null)
     const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
 
     const [attractions, setAttractions] = useState<AttractionOption[]>([])
@@ -576,6 +573,12 @@ export default function TripAdd() {
             setTransportDestinationInput(destinations[0])
         }
     }, [destinations, transportDestinationInput])
+
+    useEffect(() => {
+        if (activeStep !== 4) return
+        if (destinations.length === 0) return
+        void fetchAccommodations()
+    }, [activeStep, destinations])
 
     useEffect(() => {
         if (activeStep !== 3) return
@@ -779,6 +782,50 @@ export default function TripAdd() {
             setNavigationPlans(plans)
         } finally {
             setRoutesLoading(false)
+        }
+    }
+
+    async function fetchAccommodations() {
+        if (destinations.length === 0) return
+
+        setAccommodationsLoading(true)
+        setAccommodationsError(null)
+        try {
+            const destination = encodeURIComponent(destinations[0])
+            const response = await fetch(`/api/accommodations?destination=${destination}&pageSize=5`)
+
+            if (!response.ok) {
+                const err = (await response.json()) as { error?: string }
+                throw new Error(err.error ?? "Failed to load accommodations")
+            }
+
+            const data = (await response.json()) as {
+                results: Array<{
+                    name: string
+                    location: string
+                    nightlyRate: number
+                    rating?: number
+                    placeId?: string
+                }>
+            }
+
+            const options: StayOption[] = data.results.map((r) => ({
+                name: r.name,
+                location: r.location,
+                nightlyRate: r.nightlyRate,
+            }))
+
+            setAccommodations(
+                options.length > 0
+                    ? options
+                    : [{ name: "No results found", location: destinations[0], nightlyRate: 0 }]
+            )
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Unknown error"
+            setAccommodationsError(`Could not load accommodations: ${message}`)
+            setAccommodations([])
+        } finally {
+            setAccommodationsLoading(false)
         }
     }
 
@@ -1167,7 +1214,32 @@ export default function TripAdd() {
 
                         {activeStep === 4 && (
                             <Stack spacing={2}>
-                                <Typography color="text.secondary">Select a stay option (fake data for now).</Typography>
+                                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                    <Typography color="text.secondary">
+                                        {destinations.length > 0
+                                            ? `Lodging options near ${destinations[0]}`
+                                            : "Add a destination first to search for accommodations."}
+                                    </Typography>
+                                    <Button
+                                        variant="outlined"
+                                        size="small"
+                                        onClick={fetchAccommodations}
+                                        disabled={accommodationsLoading || destinations.length === 0}
+                                    >
+                                        {accommodationsLoading ? "Searching…" : "Refresh"}
+                                    </Button>
+                                </Stack>
+
+                                {accommodationsError && (
+                                    <Alert severity="error">{accommodationsError}</Alert>
+                                )}
+
+                                {!accommodationsLoading && accommodations.length === 0 && !accommodationsError && (
+                                    <Typography color="text.secondary" variant="body2">
+                                        No accommodations found. Try refreshing or adding a destination.
+                                    </Typography>
+                                )}
+
                                 {accommodations.map((stay) => (
                                     <Paper
                                         key={stay.name}
@@ -1182,7 +1254,7 @@ export default function TripAdd() {
                                         onClick={() => setSelectedAccommodation(stay)}
                                     >
                                         <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
-                                        <Typography color="text.secondary">{stay.location}</Typography>
+                                        <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
                                         <Typography>{toCurrency(stay.nightlyRate)} / night × {nights} nights</Typography>
                                     </Paper>
                                 ))}
