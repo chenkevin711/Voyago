@@ -12,6 +12,8 @@ import {
     Step,
     StepLabel,
     Stepper,
+    Tab,
+    Tabs,
     TextField,
     Typography
 } from "@mui/material"
@@ -506,11 +508,14 @@ export default function TripAdd() {
     const [transportPlan, setTransportPlan] = useState<TransportPlanResponse | null>(null)
     const [transportError, setTransportError] = useState<string | null>(null)
 
-    const [accommodations, setAccommodations] = useState<StayOptionWithReviews[]>([])
-    const [accommodationsLoading, setAccommodationsLoading] = useState(false)
-    const [accommodationsError, setAccommodationsError] = useState<string | null>(null)
-    const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
+    // Per-destination accommodation state
+    // Keys are destination strings (e.g. "Paris")
+    const [accommodationsByDest, setAccommodationsByDest] = useState<Record<string, StayOptionWithReviews[]>>({})
+    const [accommodationsLoadingByDest, setAccommodationsLoadingByDest] = useState<Record<string, boolean>>({})
+    const [accommodationsErrorByDest, setAccommodationsErrorByDest] = useState<Record<string, string | null>>({})
+    const [selectedAccommodationByDest, setSelectedAccommodationByDest] = useState<Record<string, StayOption>>({})
     const [expandedAccommodation, setExpandedAccommodation] = useState<string | null>(null)
+    const [activeAccommodationTab, setActiveAccommodationTab] = useState(0)
 
     const [attractions, setAttractions] = useState<AttractionOption[]>([])
     const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([])
@@ -531,7 +536,10 @@ export default function TripAdd() {
     const budget = Number(budgetInput)
 
     const flightCost = selectedFlight?.price ?? 0
-    const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0
+    const stayCost = Object.values(selectedAccommodationByDest).reduce(
+        (sum, stay) => sum + stay.nightlyRate * nights,
+        0
+    )
     const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0)
     const estimatedTotal = flightCost + stayCost + attractionCost
     const budgetDifference = budget - estimatedTotal
@@ -594,7 +602,13 @@ export default function TripAdd() {
     useEffect(() => {
         if (activeStep !== 4) return
         if (destinations.length === 0) return
-        void fetchAccommodations()
+        // Fetch only destinations we haven't loaded yet
+        const unfetched = destinations.filter(
+            (d) => !accommodationsByDest[d] && !accommodationsLoadingByDest[d]
+        )
+        unfetched.forEach((d) => void fetchAccommodationsForDest(d))
+        // Reset tab to 0 when destinations change
+        setActiveAccommodationTab(0)
     }, [activeStep, destinations])
 
     useEffect(() => {
@@ -802,14 +816,13 @@ export default function TripAdd() {
         }
     }
 
-    async function fetchAccommodations() {
-        if (destinations.length === 0) return
-
-        setAccommodationsLoading(true)
-        setAccommodationsError(null)
+    async function fetchAccommodationsForDest(destination: string) {
+        setAccommodationsLoadingByDest((prev) => ({ ...prev, [destination]: true }))
+        setAccommodationsErrorByDest((prev) => ({ ...prev, [destination]: null }))
         try {
-            const destination = encodeURIComponent(destinations[0])
-            const response = await fetch(`/api/accommodations?destination=${destination}&pageSize=5`)
+            const response = await fetch(
+                `/api/accommodations?destination=${encodeURIComponent(destination)}&pageSize=5`
+            )
 
             if (!response.ok) {
                 const err = (await response.json()) as { error?: string }
@@ -838,17 +851,21 @@ export default function TripAdd() {
                 reviews: r.reviews ?? [],
             }))
 
-            setAccommodations(
-                options.length > 0
+            setAccommodationsByDest((prev) => ({
+                ...prev,
+                [destination]: options.length > 0
                     ? options
-                    : [{ name: "No results found", location: destinations[0], nightlyRate: 0, reviews: [] }]
-            )
+                    : [{ name: "No results found", location: destination, nightlyRate: 0, reviews: [] }]
+            }))
         } catch (err) {
             const message = err instanceof Error ? err.message : "Unknown error"
-            setAccommodationsError(`Could not load accommodations: ${message}`)
-            setAccommodations([])
+            setAccommodationsErrorByDest((prev) => ({
+                ...prev,
+                [destination]: `Could not load accommodations: ${message}`
+            }))
+            setAccommodationsByDest((prev) => ({ ...prev, [destination]: [] }))
         } finally {
-            setAccommodationsLoading(false)
+            setAccommodationsLoadingByDest((prev) => ({ ...prev, [destination]: false }))
         }
     }
 
@@ -940,8 +957,8 @@ export default function TripAdd() {
             selectedFlight,
             transportationNotes,
             navigationPlans,
-            accommodations,
-            selectedAccommodation,
+            accommodations: Object.values(accommodationsByDest).flat(),
+            selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
             attractions,
             selectedAttractions,
             estimatedTotal,
@@ -1240,174 +1257,283 @@ export default function TripAdd() {
                                 <Stack direction="row" alignItems="center" justifyContent="space-between">
                                     <Typography color="text.secondary">
                                         {destinations.length > 0
-                                            ? `Lodging options near ${destinations[0]}`
+                                            ? "Select a place to stay for each destination."
                                             : "Add a destination first to search for accommodations."}
                                     </Typography>
                                     <Button
                                         variant="outlined"
                                         size="small"
-                                        onClick={fetchAccommodations}
-                                        disabled={accommodationsLoading || destinations.length === 0}
+                                        disabled={destinations.length === 0 || destinations.every((d) => accommodationsLoadingByDest[d])}
+                                        onClick={() => {
+                                            destinations.forEach((d) => void fetchAccommodationsForDest(d))
+                                        }}
                                     >
-                                        {accommodationsLoading ? "Searching…" : "Refresh"}
+                                        Refresh All
                                     </Button>
                                 </Stack>
 
-                                {accommodationsError && (
-                                    <Alert severity="error">{accommodationsError}</Alert>
-                                )}
-
-                                {!accommodationsLoading && accommodations.length === 0 && !accommodationsError && (
-                                    <Typography color="text.secondary" variant="body2">
-                                        No accommodations found. Try refreshing or adding a destination.
+                                {/* Progress indicator: how many destinations have a selection */}
+                                {destinations.length > 1 && (
+                                    <Typography variant="body2" color="text.secondary">
+                                        {Object.keys(selectedAccommodationByDest).length} of {destinations.length} destinations have a stay selected.
                                     </Typography>
                                 )}
 
-                                {accommodations.map((stay) => {
-                                    const isSelected = selectedAccommodation?.name === stay.name
-                                    const isExpanded = expandedAccommodation === stay.name
-
-                                    return (
-                                        <Paper
-                                            key={stay.name}
-                                            elevation={0}
-                                            sx={{
-                                                borderRadius: 2,
-                                                border: isSelected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
-                                                borderColor: isSelected ? "primary.main" : "rgba(47,65,86,0.15)",
-                                                overflow: "hidden"
-                                            }}
-                                        >
-                                            {/* ── Main card row ── */}
-                                            <Box
-                                                sx={{ p: 2, cursor: "pointer" }}
-                                                onClick={() => setSelectedAccommodation(stay)}
-                                            >
-                                                <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                                                    <Box>
-                                                        <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
-                                                        <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
-                                                        <Typography sx={{ mt: 0.5 }}>
-                                                            {toCurrency(stay.nightlyRate)} / night × {nights} nights
-                                                        </Typography>
-                                                    </Box>
-
-                                                    {/* Overall rating badge */}
-                                                    {stay.rating != null && (
-                                                        <Stack alignItems="center" spacing={0}>
-                                                            <Box
-                                                                sx={{
-                                                                    bgcolor: stay.rating >= 4.5 ? "success.main" : stay.rating >= 4 ? "primary.main" : "warning.main",
-                                                                    color: "#fff",
-                                                                    borderRadius: 1.5,
-                                                                    px: 1,
-                                                                    py: 0.25,
-                                                                    fontWeight: 700,
-                                                                    fontSize: "0.9rem",
-                                                                    minWidth: 40,
-                                                                    textAlign: "center"
-                                                                }}
-                                                            >
-                                                                {stay.rating.toFixed(1)}
-                                                            </Box>
-                                                            {stay.userRatingCount != null && (
-                                                                <Typography variant="caption" color="text.secondary">
-                                                                    {stay.userRatingCount.toLocaleString()} reviews
-                                                                </Typography>
+                                {/* Destination tab strip — only shown when >1 destination */}
+                                {destinations.length > 1 && (
+                                    <Tabs
+                                        value={activeAccommodationTab}
+                                        onChange={(_, v: number) => {
+                                            setActiveAccommodationTab(v)
+                                            setExpandedAccommodation(null)
+                                        }}
+                                        variant="scrollable"
+                                        scrollButtons="auto"
+                                        sx={{ borderBottom: 1, borderColor: "divider" }}
+                                    >
+                                        {destinations.map((dest, idx) => {
+                                            const isLoading = accommodationsLoadingByDest[dest]
+                                            const hasSelection = Boolean(selectedAccommodationByDest[dest])
+                                            return (
+                                                <Tab
+                                                    key={dest}
+                                                    value={idx}
+                                                    label={
+                                                        <Stack direction="row" alignItems="center" spacing={0.75}>
+                                                            <span>{dest}</span>
+                                                            {isLoading && (
+                                                                <Typography variant="caption" color="text.secondary">…</Typography>
+                                                            )}
+                                                            {!isLoading && hasSelection && (
+                                                                <Box
+                                                                    sx={{
+                                                                        width: 8, height: 8,
+                                                                        borderRadius: "50%",
+                                                                        bgcolor: "success.main",
+                                                                        flexShrink: 0
+                                                                    }}
+                                                                />
                                                             )}
                                                         </Stack>
-                                                    )}
-                                                </Stack>
-                                            </Box>
+                                                    }
+                                                />
+                                            )
+                                        })}
+                                    </Tabs>
+                                )}
 
-                                            {/* ── Reviews toggle ── */}
-                                            {stay.reviews.length > 0 && (
-                                                <>
-                                                    <Divider />
-                                                    <Box
-                                                        sx={{
-                                                            px: 2,
-                                                            py: 0.75,
-                                                            cursor: "pointer",
-                                                            display: "flex",
-                                                            alignItems: "center",
-                                                            gap: 0.5,
-                                                            bgcolor: "rgba(47,65,86,0.03)",
-                                                            "&:hover": { bgcolor: "rgba(47,65,86,0.07)" }
-                                                        }}
-                                                        onClick={() =>
-                                                            setExpandedAccommodation(isExpanded ? null : stay.name)
-                                                        }
-                                                    >
-                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                                            {isExpanded ? "Hide" : "Show"} guest reviews ({stay.reviews.length})
-                                                        </Typography>
-                                                        <Typography variant="body2" color="text.secondary">
-                                                            {isExpanded ? "▲" : "▼"}
-                                                        </Typography>
-                                                    </Box>
+                                {/* Panel for the active destination */}
+                                {destinations.map((dest, idx) => {
+                                    if (idx !== activeAccommodationTab) return null
 
-                                                    <Collapse in={isExpanded}>
-                                                        <Stack spacing={0} divider={<Divider />}>
-                                                            {stay.reviews.map((review, idx) => (
-                                                                <Box key={idx} sx={{ px: 2, py: 1.5 }}>
-                                                                    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
-                                                                        <Stack direction="row" alignItems="center" spacing={1}>
-                                                                            {/* Author avatar / photo */}
-                                                                            {review.authorPhotoUri ? (
-                                                                                <Box
-                                                                                    component="img"
-                                                                                    src={review.authorPhotoUri}
-                                                                                    alt={review.author}
-                                                                                    sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
-                                                                                />
-                                                                            ) : (
-                                                                                <Box
-                                                                                    sx={{
-                                                                                        width: 28, height: 28,
-                                                                                        borderRadius: "50%",
-                                                                                        bgcolor: "primary.light",
-                                                                                        display: "flex",
-                                                                                        alignItems: "center",
-                                                                                        justifyContent: "center",
-                                                                                        color: "#fff",
-                                                                                        fontSize: "0.75rem",
-                                                                                        fontWeight: 700
-                                                                                    }}
-                                                                                >
-                                                                                    {review.author.charAt(0).toUpperCase()}
-                                                                                </Box>
-                                                                            )}
-                                                                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                                                                {review.author}
-                                                                            </Typography>
-                                                                        </Stack>
+                                    const stays = accommodationsByDest[dest] ?? []
+                                    const isLoading = accommodationsLoadingByDest[dest] ?? false
+                                    const error = accommodationsErrorByDest[dest] ?? null
+                                    const selectedForDest = selectedAccommodationByDest[dest]
 
-                                                                        <Stack direction="row" alignItems="center" spacing={1}>
-                                                                            {/* Star rating */}
-                                                                            <Typography variant="body2" sx={{ color: "#f59e0b", letterSpacing: "-1px" }}>
-                                                                                {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
-                                                                            </Typography>
-                                                                            <Typography variant="caption" color="text.secondary">
-                                                                                {review.relativeTime}
-                                                                            </Typography>
-                                                                        </Stack>
-                                                                    </Stack>
+                                    return (
+                                        <Stack key={dest} spacing={2}>
+                                            {error && <Alert severity="error">{error}</Alert>}
 
-                                                                    {review.text && (
-                                                                        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-                                                                            {review.text}
-                                                                        </Typography>
-                                                                    )}
-                                                                </Box>
-                                                            ))}
-                                                        </Stack>
-                                                    </Collapse>
-                                                </>
+                                            {isLoading && (
+                                                <Typography color="text.secondary" variant="body2">
+                                                    Searching for lodging in {dest}…
+                                                </Typography>
                                             )}
-                                        </Paper>
+
+                                            {!isLoading && stays.length === 0 && !error && (
+                                                <Stack spacing={1}>
+                                                    <Typography color="text.secondary" variant="body2">
+                                                        No results for {dest}.
+                                                    </Typography>
+                                                    <Button
+                                                        variant="outlined"
+                                                        size="small"
+                                                        sx={{ alignSelf: "flex-start" }}
+                                                        onClick={() => void fetchAccommodationsForDest(dest)}
+                                                    >
+                                                        Retry
+                                                    </Button>
+                                                </Stack>
+                                            )}
+
+                                            {stays.map((stay) => {
+                                                const isSelected = selectedForDest?.name === stay.name
+                                                const isExpanded = expandedAccommodation === `${dest}::${stay.name}`
+
+                                                return (
+                                                    <Paper
+                                                        key={stay.name}
+                                                        elevation={0}
+                                                        sx={{
+                                                            borderRadius: 2,
+                                                            border: isSelected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
+                                                            borderColor: isSelected ? "primary.main" : "rgba(47,65,86,0.15)",
+                                                            overflow: "hidden"
+                                                        }}
+                                                    >
+                                                        {/* ── Main card row ── */}
+                                                        <Box
+                                                            sx={{ p: 2, cursor: "pointer" }}
+                                                            onClick={() =>
+                                                                setSelectedAccommodationByDest((prev) => ({
+                                                                    ...prev,
+                                                                    [dest]: stay
+                                                                }))
+                                                            }
+                                                        >
+                                                            <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                                                                <Box>
+                                                                    <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
+                                                                    <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
+                                                                    <Typography sx={{ mt: 0.5 }}>
+                                                                        {toCurrency(stay.nightlyRate)} / night × {nights} nights
+                                                                    </Typography>
+                                                                </Box>
+
+                                                                {/* Overall rating badge */}
+                                                                {stay.rating != null && (
+                                                                    <Stack alignItems="center" spacing={0}>
+                                                                        <Box
+                                                                            sx={{
+                                                                                bgcolor: stay.rating >= 4.5 ? "success.main" : stay.rating >= 4 ? "primary.main" : "warning.main",
+                                                                                color: "#fff",
+                                                                                borderRadius: 1.5,
+                                                                                px: 1,
+                                                                                py: 0.25,
+                                                                                fontWeight: 700,
+                                                                                fontSize: "0.9rem",
+                                                                                minWidth: 40,
+                                                                                textAlign: "center"
+                                                                            }}
+                                                                        >
+                                                                            {stay.rating.toFixed(1)}
+                                                                        </Box>
+                                                                        {stay.userRatingCount != null && (
+                                                                            <Typography variant="caption" color="text.secondary">
+                                                                                {stay.userRatingCount.toLocaleString()} reviews
+                                                                            </Typography>
+                                                                        )}
+                                                                    </Stack>
+                                                                )}
+                                                            </Stack>
+                                                        </Box>
+
+                                                        {/* ── Reviews toggle ── */}
+                                                        {stay.reviews.length > 0 && (
+                                                            <>
+                                                                <Divider />
+                                                                <Box
+                                                                    sx={{
+                                                                        px: 2,
+                                                                        py: 0.75,
+                                                                        cursor: "pointer",
+                                                                        display: "flex",
+                                                                        alignItems: "center",
+                                                                        gap: 0.5,
+                                                                        bgcolor: "rgba(47,65,86,0.03)",
+                                                                        "&:hover": { bgcolor: "rgba(47,65,86,0.07)" }
+                                                                    }}
+                                                                    onClick={() =>
+                                                                        setExpandedAccommodation(
+                                                                            isExpanded ? null : `${dest}::${stay.name}`
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                        {isExpanded ? "Hide" : "Show"} guest reviews ({stay.reviews.length})
+                                                                    </Typography>
+                                                                    <Typography variant="body2" color="text.secondary">
+                                                                        {isExpanded ? "▲" : "▼"}
+                                                                    </Typography>
+                                                                </Box>
+
+                                                                <Collapse in={isExpanded}>
+                                                                    <Stack spacing={0} divider={<Divider />}>
+                                                                        {stay.reviews.map((review, ridx) => (
+                                                                            <Box key={ridx} sx={{ px: 2, py: 1.5 }}>
+                                                                                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        {review.authorPhotoUri ? (
+                                                                                            <Box
+                                                                                                component="img"
+                                                                                                src={review.authorPhotoUri}
+                                                                                                alt={review.author}
+                                                                                                sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <Box
+                                                                                                sx={{
+                                                                                                    width: 28, height: 28,
+                                                                                                    borderRadius: "50%",
+                                                                                                    bgcolor: "primary.light",
+                                                                                                    display: "flex",
+                                                                                                    alignItems: "center",
+                                                                                                    justifyContent: "center",
+                                                                                                    color: "#fff",
+                                                                                                    fontSize: "0.75rem",
+                                                                                                    fontWeight: 700
+                                                                                                }}
+                                                                                            >
+                                                                                                {review.author.charAt(0).toUpperCase()}
+                                                                                            </Box>
+                                                                                        )}
+                                                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                                            {review.author}
+                                                                                        </Typography>
+                                                                                    </Stack>
+
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        <Typography variant="body2" sx={{ color: "#f59e0b", letterSpacing: "-1px" }}>
+                                                                                            {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                                                                                        </Typography>
+                                                                                        <Typography variant="caption" color="text.secondary">
+                                                                                            {review.relativeTime}
+                                                                                        </Typography>
+                                                                                    </Stack>
+                                                                                </Stack>
+
+                                                                                {review.text && (
+                                                                                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                                                                                        {review.text}
+                                                                                    </Typography>
+                                                                                )}
+                                                                            </Box>
+                                                                        ))}
+                                                                    </Stack>
+                                                                </Collapse>
+                                                            </>
+                                                        )}
+                                                    </Paper>
+                                                )
+                                            })}
+                                        </Stack>
                                     )
                                 })}
+
+                                {/* Summary of all selections when >1 destination */}
+                                {destinations.length > 1 && Object.keys(selectedAccommodationByDest).length > 0 && (
+                                    <Paper elevation={0} sx={{ p: 2, borderRadius: 2, bgcolor: "rgba(47,65,86,0.04)" }}>
+                                        <Typography sx={{ fontWeight: 700, mb: 1 }}>Selected stays</Typography>
+                                        <Stack spacing={0.5}>
+                                            {destinations.map((dest) => {
+                                                const sel = selectedAccommodationByDest[dest]
+                                                return (
+                                                    <Stack key={dest} direction="row" justifyContent="space-between">
+                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{dest}</Typography>
+                                                        {sel ? (
+                                                            <Typography variant="body2" color="text.secondary">
+                                                                {sel.name} · {toCurrency(sel.nightlyRate)}/night
+                                                            </Typography>
+                                                        ) : (
+                                                            <Typography variant="body2" color="text.disabled">Not selected</Typography>
+                                                        )}
+                                                    </Stack>
+                                                )
+                                            })}
+                                        </Stack>
+                                    </Paper>
+                                )}
                             </Stack>
                         )}
 
