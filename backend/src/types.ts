@@ -169,3 +169,44 @@ export interface Trip {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Types related to Google Places API and accommodation search results.
+ */
+export interface GooglePlace {
+    id?: string
+    displayName?: { text?: string }
+    formattedAddress?: string
+    priceLevel?: string          // "PRICE_LEVEL_INEXPENSIVE" | "MODERATE" | "EXPENSIVE" | "VERY_EXPENSIVE"
+    rating?: number
+    userRatingCount?: number
+    location?: { latitude?: number; longitude?: number }
+    regularOpeningHours?: { openNow?: boolean }
+    reviews?: Array<{
+        name?: string
+        rating?: number
+        text?: { text?: string; languageCode?: string }
+        originalText?: { text?: string; languageCode?: string }
+        authorAttribution?: {
+            displayName?: string
+            uri?: string
+            photoUri?: string
+        }
+        relativePublishTimeDescription?: string
+        publishTime?: string
+    }>
+}
+
+export interface GooglePlacesTextSearchResponse {
+    places?: GooglePlace[]
+}
+
+export interface AccommodationResult {
+    name: string
+    location: string
+    nightlyRate: number          // estimated from priceLevel; real pricing requires a booking API
+    rating?: number
+    userRatingCount?: number
+    placeId?: string
+    source: "google_places"
+}

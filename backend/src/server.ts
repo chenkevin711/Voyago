@@ -7,6 +7,7 @@ import usersRouter from './routes/users'
 import cookieParser from "cookie-parser";
 import tripsRouter from "./routes/trips";
 import transportRouter from "./routes/transport";
+import accommodationRouter from "./routes/accommodation"
 
 const app = express()
 
@@ -22,10 +23,10 @@ app.use(express.json())
 app.use(cookieParser());
 app.use("/api/trips", tripsRouter);
 app.use("/api/transport", transportRouter);
-// Mount auth routes
 app.use('/api/auth', authRouter)
 app.use('/api/relations', relationsRouter)
 app.use('/api/users', usersRouter)
+app.use('/api/accommodations', accommodationRouter)
 
 // Load environment variables from the .env file
 const { loadEnvFile } = require('node:process');

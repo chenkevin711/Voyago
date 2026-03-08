@@ -3,6 +3,7 @@ import {
     Alert,
     Box,
     Button,
+    Collapse,
     Divider,
     MenuItem,
     Paper,
@@ -10,6 +11,8 @@ import {
     Step,
     StepLabel,
     Stepper,
+    Tab,
+    Tabs,
     TextField,
     Typography
 } from "@mui/material"
@@ -63,11 +66,40 @@ const stepTitles = [
     "Attractions"
 ]
 
-const fakeStays: StayOption[] = [
-    { name: "Harbor Light Suites", location: "City Center", nightlyRate: 180 },
-    { name: "Maple Boutique Stay", location: "Old Town", nightlyRate: 135 },
-    { name: "Voyager Residence", location: "Waterfront", nightlyRate: 220 }
-]
+type StayReview = {
+    author: string
+    authorPhotoUri?: string
+    rating: number
+    text: string
+    relativeTime: string
+}
+
+type StayOptionWithReviews = StayOption & {
+    rating?: number
+    userRatingCount?: number
+    placeId?: string
+    reviews: StayReview[]
+}
+
+type AttractionReview = {
+    author: string
+    authorPhotoUri?: string
+    rating: number
+    text: string
+    relativeTime: string
+}
+
+type AttractionOptionWithReviews = AttractionOption & {
+    rating?: number
+    userRatingCount?: number
+    reviews: AttractionReview[]
+}
+
+type RouteAlt = {
+    distanceMeters: number
+    duration: string
+    encodedPolyline: string
+}
 
 function slugify(value: string): string {
     return value
@@ -117,12 +149,23 @@ export default function TripAdd() {
     const [resolvedFlightAirports, setResolvedFlightAirports] = useState<ResolvedAirport[]>([])
     const [transportError, setTransportError] = useState<string | null>(null)
 
-    const [accommodations] = useState<StayOption[]>(fakeStays)
-    const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
+    // Per-destination accommodation state
+    // Keys are destination strings (e.g. "Paris")
+    const [accommodationsByDest, setAccommodationsByDest] = useState<Record<string, StayOptionWithReviews[]>>({})
+    const [accommodationsLoadingByDest, setAccommodationsLoadingByDest] = useState<Record<string, boolean>>({})
+    const [accommodationsErrorByDest, setAccommodationsErrorByDest] = useState<Record<string, string | null>>({})
+    const [selectedAccommodationByDest, setSelectedAccommodationByDest] = useState<Record<string, StayOption>>({})
+    const [expandedAccommodation, setExpandedAccommodation] = useState<string | null>(null)
+    const [activeAccommodationTab, setActiveAccommodationTab] = useState(0)
 
-    const [attractions, setAttractions] = useState<AttractionOption[]>([])
-    const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([])
-    const [attractionsLoading, setAttractionsLoading] = useState(false)
+    // Per-destination attraction state
+    const [attractionsByDest, setAttractionsByDest] = useState<Record<string, AttractionOptionWithReviews[]>>({})
+    const [attractionsLoadingByDest, setAttractionsLoadingByDest] = useState<Record<string, boolean>>({})
+    const [attractionsErrorByDest, setAttractionsErrorByDest] = useState<Record<string, string | null>>({})
+    const [selectedAttractionsByDest, setSelectedAttractionsByDest] = useState<Record<string, AttractionOptionWithReviews[]>>({})
+    const [attractionPlacesByDest, setAttractionPlacesByDest] = useState<Record<string, ResolvedPlace[]>>({})
+    const [expandedAttraction, setExpandedAttraction] = useState<string | null>(null)
+    const [activeAttractionTab, setActiveAttractionTab] = useState(0)
 
     const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
     const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
@@ -130,16 +173,20 @@ export default function TripAdd() {
     const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
     const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
     const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
-    const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
     const destinations = useMemo(() => destinationStops.map((stop) => stop.name), [destinationStops])
 
     const nights = tripNights(startDate, endDate)
     const budget = Number(budgetInput)
 
-    const flightCost = Object.values(selectedFlightsByLeg).reduce((sum, option) => sum + option.price, 0)
-    const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0
-    const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0)
+    const flightCost = selectedFlight?.price ?? 0
+    const stayCost = Object.values(selectedAccommodationByDest).reduce(
+        (sum, stay) => sum + stay.nightlyRate * nights,
+        0
+    )
+    const attractionCost = Object.values(selectedAttractionsByDest)
+        .flat()
+        .reduce((sum, a) => sum + a.price, 0)
     const estimatedTotal = flightCost + stayCost + attractionCost
     const budgetDifference = budget - estimatedTotal
     const overBudget = budgetDifference < 0
@@ -199,6 +246,18 @@ export default function TripAdd() {
 
         setNavigationPlans(plans)
     }, [routeOptionsByLeg, routesByLeg, selectedRouteByLeg])
+
+    useEffect(() => {
+        if (activeStep !== 4) return
+        if (destinations.length === 0) return
+        // Fetch only destinations we haven't loaded yet
+        const unfetched = destinations.filter(
+            (d) => !accommodationsByDest[d] && !accommodationsLoadingByDest[d]
+        )
+        unfetched.forEach((d) => void fetchAccommodationsForDest(d))
+        // Reset tab to 0 when destinations change
+        setActiveAccommodationTab(0)
+    }, [activeStep, destinations])
 
     useEffect(() => {
         if (activeStep !== 3) return
@@ -509,18 +568,72 @@ export default function TripAdd() {
         }
     }
 
-    async function fetchAttractions() {
-        if (destinations.length === 0) return
+    async function fetchAccommodationsForDest(destination: string) {
+        setAccommodationsLoadingByDest((prev) => ({ ...prev, [destination]: true }))
+        setAccommodationsErrorByDest((prev) => ({ ...prev, [destination]: null }))
+        try {
+            const response = await fetch(
+                `/api/accommodations?destination=${encodeURIComponent(destination)}&pageSize=5`
+            )
 
-        setAttractionsLoading(true)
+            if (!response.ok) {
+                const err = (await response.json()) as { error?: string }
+                throw new Error(err.error ?? "Failed to load accommodations")
+            }
 
+            const data = (await response.json()) as {
+                results: Array<{
+                    name: string
+                    location: string
+                    nightlyRate: number
+                    rating?: number
+                    userRatingCount?: number
+                    placeId?: string
+                    reviews: StayReview[]
+                }>
+            }
+
+            const options: StayOptionWithReviews[] = data.results.map((r) => ({
+                name: r.name,
+                location: r.location,
+                nightlyRate: r.nightlyRate,
+                rating: r.rating,
+                userRatingCount: r.userRatingCount,
+                placeId: r.placeId,
+                reviews: r.reviews ?? [],
+            }))
+
+            setAccommodationsByDest((prev) => ({
+                ...prev,
+                [destination]: options.length > 0
+                    ? options
+                    : [{ name: "No results found", location: destination, nightlyRate: 0, reviews: [] }]
+            }))
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Unknown error"
+            setAccommodationsErrorByDest((prev) => ({
+                ...prev,
+                [destination]: `Could not load accommodations: ${message}`
+            }))
+            setAccommodationsByDest((prev) => ({ ...prev, [destination]: [] }))
+        } finally {
+            setAccommodationsLoadingByDest((prev) => ({ ...prev, [destination]: false }))
+        }
+    }
+
+    async function fetchAttractionsForDest(destination: string) {
+        setAttractionsLoadingByDest((prev) => ({ ...prev, [destination]: true }))
+        setAttractionsErrorByDest((prev) => ({ ...prev, [destination]: null }))
         try {
             if (!mapsApiKey) {
-                setAttractions([
-                    { name: "City Walking Tour", location: destinations[0], price: 35, source: "mock" },
-                    { name: "Museum Pass", location: destinations[0], price: 55, source: "mock" },
-                    { name: "Food Market Crawl", location: destinations[0], price: 40, source: "mock" }
-                ])
+                setAttractionsByDest((prev) => ({
+                    ...prev,
+                    [destination]: [
+                        { name: "City Walking Tour", location: destination, price: 35, source: "mock", reviews: [] },
+                        { name: "Museum Pass", location: destination, price: 55, source: "mock", reviews: [] },
+                        { name: "Food Market Crawl", location: destination, price: 40, source: "mock", reviews: [] }
+                    ]
+                }))
                 return
             }
 
@@ -529,53 +642,98 @@ export default function TripAdd() {
                 headers: {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": mapsApiKey,
-                    "X-Goog-FieldMask": "places.displayName,places.formattedAddress"
+                    "X-Goog-FieldMask": [
+                        "places.displayName",
+                        "places.formattedAddress",
+                        "places.rating",
+                        "places.userRatingCount",
+                        "places.reviews"
+                    ].join(",")
                 },
                 body: JSON.stringify({
-                    textQuery: `Top attractions in ${destinations[0]}`,
+                    textQuery: `Top attractions in ${destination}`,
                     pageSize: 5
                 })
             })
 
+            if (!response.ok) throw new Error("Places API request failed")
+
             const data = (await response.json()) as {
-                places?: Array<{ displayName?: { text?: string }; formattedAddress?: string }>
+                places?: Array<{
+                    displayName?: { text?: string }
+                    formattedAddress?: string
+                    rating?: number
+                    userRatingCount?: number
+                    reviews?: Array<{
+                        rating?: number
+                        text?: { text?: string }
+                        authorAttribution?: { displayName?: string; photoUri?: string }
+                        relativePublishTimeDescription?: string
+                    }>
+                }>
             }
 
-            const options = (data.places ?? []).map((place, index) => ({
+            const options: AttractionOptionWithReviews[] = (data.places ?? []).map((place, index) => ({
                 name: place.displayName?.text ?? `Attraction ${index + 1}`,
-                location: place.formattedAddress ?? destinations[0],
+                location: place.formattedAddress ?? destination,
                 price: 20 + index * 12,
-                source: "google_places" as const
+                source: "google_places" as const,
+                rating: place.rating,
+                userRatingCount: place.userRatingCount,
+                reviews: (place.reviews ?? []).map((r) => ({
+                    author: r.authorAttribution?.displayName ?? "Anonymous",
+                    authorPhotoUri: r.authorAttribution?.photoUri,
+                    rating: r.rating ?? 0,
+                    text: r.text?.text ?? "",
+                    relativeTime: r.relativePublishTimeDescription ?? ""
+                }))
             }))
 
             const nextAttractions = options.length > 0
                 ? options
-                : [{ name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" as const }]
+                : [{ name: "Historic Landmarks Tour", location: destination, price: 45, source: "mock" as const, reviews: [] }]
 
-            setAttractions(nextAttractions)
+            setAttractionsByDest((prev) => ({ ...prev, [destination]: nextAttractions }))
 
-            const placeResults = await Promise.all(
-                nextAttractions.map((item) => resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` }))
-            )
-
-            setAttractionPlaces(placeResults.flatMap((place) => (place ? [place] : [])))
+            if (mapsApiKey) {
+                const placeResults = await Promise.all(
+                    nextAttractions.map((item) =>
+                        resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` })
+                    )
+                )
+                setAttractionPlacesByDest((prev) => ({
+                    ...prev,
+                    [destination]: placeResults.flatMap((p) => (p ? [p] : []))
+                }))
+            }
         } catch {
-            setAttractions([
-                { name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" },
-                { name: "Riverside Biking", location: destinations[0], price: 30, source: "mock" }
-            ])
-            setAttractionPlaces([])
+            setAttractionsErrorByDest((prev) => ({
+                ...prev,
+                [destination]: "Could not load attractions. Try again."
+            }))
+            setAttractionsByDest((prev) => ({
+                ...prev,
+                [destination]: [
+                    { name: "Historic Landmarks Tour", location: destination, price: 45, source: "mock", reviews: [] },
+                    { name: "Riverside Biking", location: destination, price: 30, source: "mock", reviews: [] }
+                ]
+            }))
         } finally {
-            setAttractionsLoading(false)
+            setAttractionsLoadingByDest((prev) => ({ ...prev, [destination]: false }))
         }
     }
 
-    function toggleAttraction(option: AttractionOption) {
-        setSelectedAttractions((prev) =>
-            prev.some((item) => item.name === option.name)
-                ? prev.filter((item) => item.name !== option.name)
-                : [...prev, option]
-        )
+    function toggleAttractionForDest(destination: string, option: AttractionOptionWithReviews) {
+        setSelectedAttractionsByDest((prev) => {
+            const current = prev[destination] ?? []
+            const exists = current.some((a) => a.name === option.name)
+            return {
+                ...prev,
+                [destination]: exists
+                    ? current.filter((a) => a.name !== option.name)
+                    : [...current, option]
+            }
+        })
     }
 
     function goNext() {
@@ -600,10 +758,10 @@ export default function TripAdd() {
             selectedFlight,
             transportationNotes,
             navigationPlans,
-            accommodations,
-            selectedAccommodation,
-            attractions,
-            selectedAttractions,
+            accommodations: Object.values(accommodationsByDest).flat(),
+            selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
+            attractions: Object.values(attractionsByDest).flat(),
+            selectedAttractions: Object.values(selectedAttractionsByDest).flat(),
             estimatedTotal,
             members: 1,
             createdAt: new Date().toISOString()
@@ -776,75 +934,583 @@ export default function TripAdd() {
 
                         {activeStep === 4 && (
                             <Stack spacing={2}>
-                                <Typography color="text.secondary">Select a stay option (fake data for now).</Typography>
-                                {accommodations.map((stay) => (
-                                    <Paper
-                                        key={stay.name}
-                                        elevation={0}
-                                        sx={{
-                                            p: 2,
-                                            borderRadius: 2,
-                                            border: selectedAccommodation?.name === stay.name ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
-                                            borderColor: selectedAccommodation?.name === stay.name ? "primary.main" : "rgba(47,65,86,0.15)",
-                                            cursor: "pointer"
+                                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                    <Typography color="text.secondary">
+                                        {destinations.length > 0
+                                            ? "Select a place to stay for each destination."
+                                            : "Add a destination first to search for accommodations."}
+                                    </Typography>
+                                    <Button
+                                        variant="outlined"
+                                        size="small"
+                                        disabled={destinations.length === 0 || destinations.every((d) => accommodationsLoadingByDest[d])}
+                                        onClick={() => {
+                                            destinations.forEach((d) => void fetchAccommodationsForDest(d))
                                         }}
-                                        onClick={() => setSelectedAccommodation(stay)}
                                     >
-                                        <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
-                                        <Typography color="text.secondary">{stay.location}</Typography>
-                                        <Typography>{toCurrency(stay.nightlyRate)} / night × {nights} nights</Typography>
+                                        Refresh All
+                                    </Button>
+                                </Stack>
+
+                                {/* Progress indicator: how many destinations have a selection */}
+                                {destinations.length > 1 && (
+                                    <Typography variant="body2" color="text.secondary">
+                                        {Object.keys(selectedAccommodationByDest).length} of {destinations.length} destinations have a stay selected.
+                                    </Typography>
+                                )}
+
+                                {/* Destination tab strip — only shown when >1 destination */}
+                                {destinations.length > 1 && (
+                                    <Tabs
+                                        value={activeAccommodationTab}
+                                        onChange={(_, v: number) => {
+                                            setActiveAccommodationTab(v)
+                                            setExpandedAccommodation(null)
+                                        }}
+                                        variant="scrollable"
+                                        scrollButtons="auto"
+                                        sx={{ borderBottom: 1, borderColor: "divider" }}
+                                    >
+                                        {destinations.map((dest, idx) => {
+                                            const isLoading = accommodationsLoadingByDest[dest]
+                                            const hasSelection = Boolean(selectedAccommodationByDest[dest])
+                                            return (
+                                                <Tab
+                                                    key={dest}
+                                                    value={idx}
+                                                    label={
+                                                        <Stack direction="row" alignItems="center" spacing={0.75}>
+                                                            <span>{dest}</span>
+                                                            {isLoading && (
+                                                                <Typography variant="caption" color="text.secondary">…</Typography>
+                                                            )}
+                                                            {!isLoading && hasSelection && (
+                                                                <Box
+                                                                    sx={{
+                                                                        width: 8, height: 8,
+                                                                        borderRadius: "50%",
+                                                                        bgcolor: "success.main",
+                                                                        flexShrink: 0
+                                                                    }}
+                                                                />
+                                                            )}
+                                                        </Stack>
+                                                    }
+                                                />
+                                            )
+                                        })}
+                                    </Tabs>
+                                )}
+
+                                {/* Panel for the active destination */}
+                                {destinations.map((dest, idx) => {
+                                    if (idx !== activeAccommodationTab) return null
+
+                                    const stays = accommodationsByDest[dest] ?? []
+                                    const isLoading = accommodationsLoadingByDest[dest] ?? false
+                                    const error = accommodationsErrorByDest[dest] ?? null
+                                    const selectedForDest = selectedAccommodationByDest[dest]
+
+                                    return (
+                                        <Stack key={dest} spacing={2}>
+                                            {error && <Alert severity="error">{error}</Alert>}
+
+                                            {isLoading && (
+                                                <Typography color="text.secondary" variant="body2">
+                                                    Searching for lodging in {dest}…
+                                                </Typography>
+                                            )}
+
+                                            {!isLoading && stays.length === 0 && !error && (
+                                                <Stack spacing={1}>
+                                                    <Typography color="text.secondary" variant="body2">
+                                                        No results for {dest}.
+                                                    </Typography>
+                                                    <Button
+                                                        variant="outlined"
+                                                        size="small"
+                                                        sx={{ alignSelf: "flex-start" }}
+                                                        onClick={() => void fetchAccommodationsForDest(dest)}
+                                                    >
+                                                        Retry
+                                                    </Button>
+                                                </Stack>
+                                            )}
+
+                                            {stays.map((stay) => {
+                                                const isSelected = selectedForDest?.name === stay.name
+                                                const isExpanded = expandedAccommodation === `${dest}::${stay.name}`
+
+                                                return (
+                                                    <Paper
+                                                        key={stay.name}
+                                                        elevation={0}
+                                                        sx={{
+                                                            borderRadius: 2,
+                                                            border: isSelected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
+                                                            borderColor: isSelected ? "primary.main" : "rgba(47,65,86,0.15)",
+                                                            overflow: "hidden"
+                                                        }}
+                                                    >
+                                                        {/* ── Main card row ── */}
+                                                        <Box
+                                                            sx={{ p: 2, cursor: "pointer" }}
+                                                            onClick={() =>
+                                                                setSelectedAccommodationByDest((prev) => ({
+                                                                    ...prev,
+                                                                    [dest]: stay
+                                                                }))
+                                                            }
+                                                        >
+                                                            <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                                                                <Box>
+                                                                    <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
+                                                                    <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
+                                                                    <Typography sx={{ mt: 0.5 }}>
+                                                                        {toCurrency(stay.nightlyRate)} / night × {nights} nights
+                                                                    </Typography>
+                                                                </Box>
+
+                                                                {/* Overall rating badge */}
+                                                                {stay.rating != null && (
+                                                                    <Stack alignItems="center" spacing={0}>
+                                                                        <Box
+                                                                            sx={{
+                                                                                bgcolor: stay.rating >= 4.5 ? "success.main" : stay.rating >= 4 ? "primary.main" : "warning.main",
+                                                                                color: "#fff",
+                                                                                borderRadius: 1.5,
+                                                                                px: 1,
+                                                                                py: 0.25,
+                                                                                fontWeight: 700,
+                                                                                fontSize: "0.9rem",
+                                                                                minWidth: 40,
+                                                                                textAlign: "center"
+                                                                            }}
+                                                                        >
+                                                                            {stay.rating.toFixed(1)}
+                                                                        </Box>
+                                                                        {stay.userRatingCount != null && (
+                                                                            <Typography variant="caption" color="text.secondary">
+                                                                                {stay.userRatingCount.toLocaleString()} reviews
+                                                                            </Typography>
+                                                                        )}
+                                                                    </Stack>
+                                                                )}
+                                                            </Stack>
+                                                        </Box>
+
+                                                        {/* ── Reviews toggle ── */}
+                                                        {stay.reviews.length > 0 && (
+                                                            <>
+                                                                <Divider />
+                                                                <Box
+                                                                    sx={{
+                                                                        px: 2,
+                                                                        py: 0.75,
+                                                                        cursor: "pointer",
+                                                                        display: "flex",
+                                                                        alignItems: "center",
+                                                                        gap: 0.5,
+                                                                        bgcolor: "rgba(47,65,86,0.03)",
+                                                                        "&:hover": { bgcolor: "rgba(47,65,86,0.07)" }
+                                                                    }}
+                                                                    onClick={() =>
+                                                                        setExpandedAccommodation(
+                                                                            isExpanded ? null : `${dest}::${stay.name}`
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                        {isExpanded ? "Hide" : "Show"} guest reviews ({stay.reviews.length})
+                                                                    </Typography>
+                                                                    <Typography variant="body2" color="text.secondary">
+                                                                        {isExpanded ? "▲" : "▼"}
+                                                                    </Typography>
+                                                                </Box>
+
+                                                                <Collapse in={isExpanded}>
+                                                                    <Stack spacing={0} divider={<Divider />}>
+                                                                        {stay.reviews.map((review, ridx) => (
+                                                                            <Box key={ridx} sx={{ px: 2, py: 1.5 }}>
+                                                                                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        {review.authorPhotoUri ? (
+                                                                                            <Box
+                                                                                                component="img"
+                                                                                                src={review.authorPhotoUri}
+                                                                                                alt={review.author}
+                                                                                                sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <Box
+                                                                                                sx={{
+                                                                                                    width: 28, height: 28,
+                                                                                                    borderRadius: "50%",
+                                                                                                    bgcolor: "primary.light",
+                                                                                                    display: "flex",
+                                                                                                    alignItems: "center",
+                                                                                                    justifyContent: "center",
+                                                                                                    color: "#fff",
+                                                                                                    fontSize: "0.75rem",
+                                                                                                    fontWeight: 700
+                                                                                                }}
+                                                                                            >
+                                                                                                {review.author.charAt(0).toUpperCase()}
+                                                                                            </Box>
+                                                                                        )}
+                                                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                                            {review.author}
+                                                                                        </Typography>
+                                                                                    </Stack>
+
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        <Typography variant="body2" sx={{ color: "#f59e0b", letterSpacing: "-1px" }}>
+                                                                                            {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                                                                                        </Typography>
+                                                                                        <Typography variant="caption" color="text.secondary">
+                                                                                            {review.relativeTime}
+                                                                                        </Typography>
+                                                                                    </Stack>
+                                                                                </Stack>
+
+                                                                                {review.text && (
+                                                                                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                                                                                        {review.text}
+                                                                                    </Typography>
+                                                                                )}
+                                                                            </Box>
+                                                                        ))}
+                                                                    </Stack>
+                                                                </Collapse>
+                                                            </>
+                                                        )}
+                                                    </Paper>
+                                                )
+                                            })}
+                                        </Stack>
+                                    )
+                                })}
+
+                                {/* Summary of all selections when >1 destination */}
+                                {destinations.length > 1 && Object.keys(selectedAccommodationByDest).length > 0 && (
+                                    <Paper elevation={0} sx={{ p: 2, borderRadius: 2, bgcolor: "rgba(47,65,86,0.04)" }}>
+                                        <Typography sx={{ fontWeight: 700, mb: 1 }}>Selected stays</Typography>
+                                        <Stack spacing={0.5}>
+                                            {destinations.map((dest) => {
+                                                const sel = selectedAccommodationByDest[dest]
+                                                return (
+                                                    <Stack key={dest} direction="row" justifyContent="space-between">
+                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{dest}</Typography>
+                                                        {sel ? (
+                                                            <Typography variant="body2" color="text.secondary">
+                                                                {sel.name} · {toCurrency(sel.nightlyRate)}/night
+                                                            </Typography>
+                                                        ) : (
+                                                            <Typography variant="body2" color="text.disabled">Not selected</Typography>
+                                                        )}
+                                                    </Stack>
+                                                )
+                                            })}
+                                        </Stack>
                                     </Paper>
-                                ))}
+                                )}
                             </Stack>
                         )}
 
                         {activeStep === 5 && (
                             <Stack spacing={2}>
-                                <Button
-                                    variant="outlined"
-                                    onClick={fetchAttractions}
-                                    disabled={attractionsLoading || destinations.length === 0}
-                                >
-                                    {attractionsLoading ? "Loading attractions..." : "Find attractions (Google Places)"}
-                                </Button>
+                                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                    <Typography color="text.secondary">
+                                        {destinations.length > 0
+                                            ? "Pick attractions for each destination."
+                                            : "Add a destination first."}
+                                    </Typography>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                        {!mapsApiKey && (
+                                            <Typography variant="caption" color="text.secondary">No API key — showing mock data</Typography>
+                                        )}
+                                        <Button
+                                            variant="outlined"
+                                            size="small"
+                                            disabled={destinations.length === 0 || destinations.every((d) => attractionsLoadingByDest[d])}
+                                            onClick={() => destinations.forEach((d) => void fetchAttractionsForDest(d))}
+                                        >
+                                            {destinations.some((d) => attractionsLoadingByDest[d]) ? "Loading…" : "Find Attractions"}
+                                        </Button>
+                                    </Stack>
+                                </Stack>
 
-                                {!mapsApiKey && (
-                                    <Alert severity="info">VITE_GOOGLE_API_KEY not set, showing mock attractions.</Alert>
+                                {/* Progress counter */}
+                                {destinations.length > 1 && (
+                                    <Typography variant="body2" color="text.secondary">
+                                        {Object.values(selectedAttractionsByDest).filter((a) => a.length > 0).length} of {destinations.length} destinations have attractions selected.
+                                    </Typography>
                                 )}
 
-                                {attractions.map((item) => {
-                                    const selected = selectedAttractions.some((a) => a.name === item.name)
+                                {/* Destination tab strip */}
+                                {destinations.length > 1 && (
+                                    <Tabs
+                                        value={activeAttractionTab}
+                                        onChange={(_, v: number) => {
+                                            setActiveAttractionTab(v)
+                                            setExpandedAttraction(null)
+                                        }}
+                                        variant="scrollable"
+                                        scrollButtons="auto"
+                                        sx={{ borderBottom: 1, borderColor: "divider" }}
+                                    >
+                                        {destinations.map((dest, idx) => {
+                                            const isLoading = attractionsLoadingByDest[dest]
+                                            const count = (selectedAttractionsByDest[dest] ?? []).length
+                                            return (
+                                                <Tab
+                                                    key={dest}
+                                                    value={idx}
+                                                    label={
+                                                        <Stack direction="row" alignItems="center" spacing={0.75}>
+                                                            <span>{dest}</span>
+                                                            {isLoading && (
+                                                                <Typography variant="caption" color="text.secondary">…</Typography>
+                                                            )}
+                                                            {!isLoading && count > 0 && (
+                                                                <Box
+                                                                    sx={{
+                                                                        bgcolor: "primary.main",
+                                                                        color: "#fff",
+                                                                        borderRadius: 10,
+                                                                        px: 0.75,
+                                                                        fontSize: "0.7rem",
+                                                                        fontWeight: 700,
+                                                                        lineHeight: "18px",
+                                                                        minWidth: 18,
+                                                                        textAlign: "center"
+                                                                    }}
+                                                                >
+                                                                    {count}
+                                                                </Box>
+                                                            )}
+                                                        </Stack>
+                                                    }
+                                                />
+                                            )
+                                        })}
+                                    </Tabs>
+                                )}
+
+                                {/* Panel for active destination */}
+                                {destinations.map((dest, idx) => {
+                                    if (idx !== activeAttractionTab) return null
+
+                                    const items = attractionsByDest[dest] ?? []
+                                    const isLoading = attractionsLoadingByDest[dest] ?? false
+                                    const error = attractionsErrorByDest[dest] ?? null
+                                    const selectedForDest = selectedAttractionsByDest[dest] ?? []
+                                    const placesForDest = attractionPlacesByDest[dest] ?? []
 
                                     return (
-                                        <Paper
-                                            key={item.name}
-                                            elevation={0}
-                                            sx={{
-                                                p: 2,
-                                                borderRadius: 2,
-                                                border: selected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
-                                                borderColor: selected ? "primary.main" : "rgba(47,65,86,0.15)",
-                                                cursor: "pointer"
-                                            }}
-                                            onClick={() => toggleAttraction(item)}
-                                        >
-                                            <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
-                                            <Typography color="text.secondary">{item.location}</Typography>
-                                            <Typography>{toCurrency(item.price)} ({item.source})</Typography>
-                                        </Paper>
+                                        <Stack key={dest} spacing={2}>
+                                            {error && <Alert severity="error">{error}</Alert>}
+
+                                            {isLoading && (
+                                                <Typography color="text.secondary" variant="body2">
+                                                    Searching for attractions in {dest}…
+                                                </Typography>
+                                            )}
+
+                                            {!isLoading && items.length === 0 && !error && (
+                                                <Stack spacing={1}>
+                                                    <Typography color="text.secondary" variant="body2">
+                                                        No attractions loaded for {dest} yet.
+                                                    </Typography>
+                                                    <Button
+                                                        variant="outlined"
+                                                        size="small"
+                                                        sx={{ alignSelf: "flex-start" }}
+                                                        onClick={() => void fetchAttractionsForDest(dest)}
+                                                    >
+                                                        Search
+                                                    </Button>
+                                                </Stack>
+                                            )}
+
+                                            {items.map((item) => {
+                                                const selected = selectedForDest.some((a) => a.name === item.name)
+                                                const isExpanded = expandedAttraction === `${dest}::${item.name}`
+
+                                                return (
+                                                    <Paper
+                                                        key={item.name}
+                                                        elevation={0}
+                                                        sx={{
+                                                            borderRadius: 2,
+                                                            border: selected ? "2px solid" : "1px solid rgba(47,65,86,0.15)",
+                                                            borderColor: selected ? "primary.main" : "rgba(47,65,86,0.15)",
+                                                            overflow: "hidden"
+                                                        }}
+                                                    >
+                                                        {/* ── Main card row ── */}
+                                                        <Box
+                                                            sx={{ p: 2, cursor: "pointer" }}
+                                                            onClick={() => toggleAttractionForDest(dest, item)}
+                                                        >
+                                                            <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                                                                <Box>
+                                                                    <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
+                                                                    <Typography color="text.secondary" variant="body2">{item.location}</Typography>
+                                                                    <Typography sx={{ mt: 0.5 }}>{toCurrency(item.price)} ({item.source})</Typography>
+                                                                </Box>
+
+                                                                {item.rating != null && (
+                                                                    <Stack alignItems="center" spacing={0}>
+                                                                        <Box
+                                                                            sx={{
+                                                                                bgcolor: item.rating >= 4.5 ? "success.main" : item.rating >= 4 ? "primary.main" : "warning.main",
+                                                                                color: "#fff",
+                                                                                borderRadius: 1.5,
+                                                                                px: 1,
+                                                                                py: 0.25,
+                                                                                fontWeight: 700,
+                                                                                fontSize: "0.9rem",
+                                                                                minWidth: 40,
+                                                                                textAlign: "center"
+                                                                            }}
+                                                                        >
+                                                                            {item.rating.toFixed(1)}
+                                                                        </Box>
+                                                                        {item.userRatingCount != null && (
+                                                                            <Typography variant="caption" color="text.secondary">
+                                                                                {item.userRatingCount.toLocaleString()} reviews
+                                                                            </Typography>
+                                                                        )}
+                                                                    </Stack>
+                                                                )}
+                                                            </Stack>
+                                                        </Box>
+
+                                                        {/* ── Reviews toggle ── */}
+                                                        {item.reviews.length > 0 && (
+                                                            <>
+                                                                <Divider />
+                                                                <Box
+                                                                    sx={{
+                                                                        px: 2, py: 0.75,
+                                                                        cursor: "pointer",
+                                                                        display: "flex",
+                                                                        alignItems: "center",
+                                                                        gap: 0.5,
+                                                                        bgcolor: "rgba(47,65,86,0.03)",
+                                                                        "&:hover": { bgcolor: "rgba(47,65,86,0.07)" }
+                                                                    }}
+                                                                    onClick={() =>
+                                                                        setExpandedAttraction(
+                                                                            isExpanded ? null : `${dest}::${item.name}`
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                        {isExpanded ? "Hide" : "Show"} visitor reviews ({item.reviews.length})
+                                                                    </Typography>
+                                                                    <Typography variant="body2" color="text.secondary">
+                                                                        {isExpanded ? "▲" : "▼"}
+                                                                    </Typography>
+                                                                </Box>
+
+                                                                <Collapse in={isExpanded}>
+                                                                    <Stack spacing={0} divider={<Divider />}>
+                                                                        {item.reviews.map((review, ridx) => (
+                                                                            <Box key={ridx} sx={{ px: 2, py: 1.5 }}>
+                                                                                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        {review.authorPhotoUri ? (
+                                                                                            <Box
+                                                                                                component="img"
+                                                                                                src={review.authorPhotoUri}
+                                                                                                alt={review.author}
+                                                                                                sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <Box sx={{
+                                                                                                width: 28, height: 28,
+                                                                                                borderRadius: "50%",
+                                                                                                bgcolor: "primary.light",
+                                                                                                display: "flex",
+                                                                                                alignItems: "center",
+                                                                                                justifyContent: "center",
+                                                                                                color: "#fff",
+                                                                                                fontSize: "0.75rem",
+                                                                                                fontWeight: 700
+                                                                                            }}>
+                                                                                                {review.author.charAt(0).toUpperCase()}
+                                                                                            </Box>
+                                                                                        )}
+                                                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                                                            {review.author}
+                                                                                        </Typography>
+                                                                                    </Stack>
+                                                                                    <Stack direction="row" alignItems="center" spacing={1}>
+                                                                                        <Typography variant="body2" sx={{ color: "#f59e0b", letterSpacing: "-1px" }}>
+                                                                                            {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                                                                                        </Typography>
+                                                                                        <Typography variant="caption" color="text.secondary">
+                                                                                            {review.relativeTime}
+                                                                                        </Typography>
+                                                                                    </Stack>
+                                                                                </Stack>
+                                                                                {review.text && (
+                                                                                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                                                                                        {review.text}
+                                                                                    </Typography>
+                                                                                )}
+                                                                            </Box>
+                                                                        ))}
+                                                                    </Stack>
+                                                                </Collapse>
+                                                            </>
+                                                        )}
+                                                    </Paper>
+                                                )
+                                            })}
+
+                                            {/* Map for this destination's attractions */}
+                                            {mapsApiKey && placesForDest.length > 0 && (
+                                                <APIProvider apiKey={mapsApiKey}>
+                                                    <TripRouteMap
+                                                        loading={false}
+                                                        places={placesForDest}
+                                                        legs={[]}
+                                                        selectedRouteByLeg={{}}
+                                                        mapId={mapId}
+                                                    />
+                                                </APIProvider>
+                                            )}
+                                        </Stack>
                                     )
                                 })}
 
-                                {mapsApiKey && attractionPlaces.length > 0 && (
-                                    <APIProvider apiKey={mapsApiKey}>
-                                        <TripRouteMap
-                                            loading={false}
-                                            places={attractionPlaces}
-                                            legs={[]}
-                                            selectedRouteByLeg={{}}
-                                            mapId={mapId}
-                                        />
-                                    </APIProvider>
+                                {/* Cross-destination summary */}
+                                {destinations.length > 1 && Object.values(selectedAttractionsByDest).some((a) => a.length > 0) && (
+                                    <Paper elevation={0} sx={{ p: 2, borderRadius: 2, bgcolor: "rgba(47,65,86,0.04)" }}>
+                                        <Typography sx={{ fontWeight: 700, mb: 1 }}>Selected attractions</Typography>
+                                        <Stack spacing={1}>
+                                            {destinations.map((dest) => {
+                                                const sel = selectedAttractionsByDest[dest] ?? []
+                                                if (sel.length === 0) return null
+                                                return (
+                                                    <Box key={dest}>
+                                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{dest}</Typography>
+                                                        <Stack spacing={0.25} sx={{ mt: 0.25 }}>
+                                                            {sel.map((a) => (
+                                                                <Stack key={a.name} direction="row" justifyContent="space-between">
+                                                                    <Typography variant="body2" color="text.secondary">{a.name}</Typography>
+                                                                    <Typography variant="body2" color="text.secondary">{toCurrency(a.price)}</Typography>
+                                                                </Stack>
+                                                            ))}
+                                                        </Stack>
+                                                    </Box>
+                                                )
+                                            })}
+                                        </Stack>
+                                    </Paper>
                                 )}
                             </Stack>
                         )}
