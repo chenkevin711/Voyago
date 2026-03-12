@@ -3,6 +3,7 @@ import {
     Alert,
     Box,
     Button,
+    Chip,
     Collapse,
     Divider,
     MenuItem,
@@ -29,7 +30,6 @@ import {
     savePlannedTrip,
     tripNights
 } from "../tripPlanning"
-
 import { APIProvider } from "@vis.gl/react-google-maps"
 import {
     getTransportPlan,
@@ -74,7 +74,7 @@ type StayReview = {
     relativeTime: string
 }
 
-type StayOptionWithReviews = StayOption & {
+type StayOptionWithReviews = Omit<StayOption, "reviews"> & {
     rating?: number
     userRatingCount?: number
     placeId?: string
@@ -89,7 +89,7 @@ type AttractionReview = {
     relativeTime: string
 }
 
-type AttractionOptionWithReviews = AttractionOption & {
+type AttractionOptionWithReviews = Omit<AttractionOption, "reviews"> & {
     rating?: number
     userRatingCount?: number
     reviews: AttractionReview[]
@@ -121,6 +121,7 @@ export default function TripAdd() {
 
     const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
     const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined
+
     const [activeStep, setActiveStep] = useState(0)
     const [tripName, setTripName] = useState("")
     const [startDate, setStartDate] = useState("")
@@ -142,8 +143,6 @@ export default function TripAdd() {
     const [resolvedFlightAirports, setResolvedFlightAirports] = useState<ResolvedAirport[]>([])
     const [transportError, setTransportError] = useState<string | null>(null)
 
-    // Per-destination accommodation state
-    // Keys are destination strings (e.g. "Paris")
     const [accommodationsByDest, setAccommodationsByDest] = useState<Record<string, StayOptionWithReviews[]>>({})
     const [accommodationsLoadingByDest, setAccommodationsLoadingByDest] = useState<Record<string, boolean>>({})
     const [accommodationsErrorByDest, setAccommodationsErrorByDest] = useState<Record<string, string | null>>({})
@@ -151,7 +150,6 @@ export default function TripAdd() {
     const [expandedAccommodation, setExpandedAccommodation] = useState<string | null>(null)
     const [activeAccommodationTab, setActiveAccommodationTab] = useState(0)
 
-    // Per-destination attraction state
     const [attractionsByDest, setAttractionsByDest] = useState<Record<string, AttractionOptionWithReviews[]>>({})
     const [attractionsLoadingByDest, setAttractionsLoadingByDest] = useState<Record<string, boolean>>({})
     const [attractionsErrorByDest, setAttractionsErrorByDest] = useState<Record<string, string | null>>({})
@@ -162,12 +160,30 @@ export default function TripAdd() {
 
     const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
     const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
-
     const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
     const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
     const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
 
+    const [saving, setSaving] = useState(false)
+    const [saveError, setSaveError] = useState<string | null>(null)
+
     const destinations = useMemo(() => destinationStops.map((stop) => stop.name), [destinationStops])
+
+    const dateError = useMemo(() => {
+        if (!startDate || !endDate) return null
+
+        const s = new Date(startDate)
+        const e = new Date(endDate)
+
+        if (Number.isNaN(s.valueOf()) || Number.isNaN(e.valueOf())) return "Please enter valid dates."
+        if (e < s) return "End date must be on or after the start date."
+
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+
+        if (s < today) return "Start date cannot be in the past."
+        return null
+    }, [startDate, endDate])
 
     const nights = tripNights(startDate, endDate)
     const budget = Number(budgetInput)
@@ -180,6 +196,7 @@ export default function TripAdd() {
     const attractionCost = Object.values(selectedAttractionsByDest)
         .flat()
         .reduce((sum, a) => sum + a.price, 0)
+
     const estimatedTotal = flightCost + stayCost + attractionCost
     const budgetDifference = budget - estimatedTotal
     const overBudget = budgetDifference < 0
@@ -187,11 +204,11 @@ export default function TripAdd() {
     const tripDates = formatDateRange(startDate, endDate)
 
     const canContinue = useMemo(() => {
-        if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate)
+        if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate) && !dateError
         if (activeStep === 1) return budgetInput.trim().length > 0 && budget > 0
         if (activeStep === 2) return destinations.length > 0
         return true
-    }, [activeStep, budget, budgetInput, destinations.length, endDate, startDate, tripName])
+    }, [activeStep, budget, budgetInput, destinations.length, endDate, startDate, tripName, dateError])
 
     useEffect(() => {
         if (!mapsApiKey || destinations.length === 0) {
@@ -243,14 +260,14 @@ export default function TripAdd() {
     useEffect(() => {
         if (activeStep !== 4) return
         if (destinations.length === 0) return
-        // Fetch only destinations we haven't loaded yet
+
         const unfetched = destinations.filter(
             (d) => !accommodationsByDest[d] && !accommodationsLoadingByDest[d]
         )
+
         unfetched.forEach((d) => void fetchAccommodationsForDest(d))
-        // Reset tab to 0 when destinations change
         setActiveAccommodationTab(0)
-    }, [activeStep, destinations])
+    }, [activeStep, destinations, accommodationsByDest, accommodationsLoadingByDest])
 
     useEffect(() => {
         if (activeStep !== 3) return
@@ -423,7 +440,11 @@ export default function TripAdd() {
                 destinations.map((destination) => resolvePlaceText({ apiKey: mapsApiKey, query: destination }))
             )
 
-            const places = placeResults.flatMap((place) => (place ? [place] : []))
+            const places = placeResults.flatMap((place, idx) => {
+                if (place) return [place]
+                return [withFallbackPlace(destinations[idx])]
+            })
+
             setResolvedPlaces(places)
 
             if (places.length < 2) {
@@ -559,6 +580,7 @@ export default function TripAdd() {
     async function fetchAccommodationsForDest(destination: string) {
         setAccommodationsLoadingByDest((prev) => ({ ...prev, [destination]: true }))
         setAccommodationsErrorByDest((prev) => ({ ...prev, [destination]: null }))
+
         try {
             const response = await fetch(
                 `/api/accommodations?destination=${encodeURIComponent(destination)}&pageSize=5`
@@ -588,7 +610,7 @@ export default function TripAdd() {
                 rating: r.rating,
                 userRatingCount: r.userRatingCount,
                 placeId: r.placeId,
-                reviews: r.reviews ?? [],
+                reviews: r.reviews ?? []
             }))
 
             setAccommodationsByDest((prev) => ({
@@ -612,6 +634,7 @@ export default function TripAdd() {
     async function fetchAttractionsForDest(destination: string) {
         setAttractionsLoadingByDest((prev) => ({ ...prev, [destination]: true }))
         setAttractionsErrorByDest((prev) => ({ ...prev, [destination]: null }))
+
         try {
             if (!mapsApiKey) {
                 setAttractionsByDest((prev) => ({
@@ -683,17 +706,16 @@ export default function TripAdd() {
 
             setAttractionsByDest((prev) => ({ ...prev, [destination]: nextAttractions }))
 
-            if (mapsApiKey) {
-                const placeResults = await Promise.all(
-                    nextAttractions.map((item) =>
-                        resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` })
-                    )
+            const placeResults = await Promise.all(
+                nextAttractions.map((item) =>
+                    resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` })
                 )
-                setAttractionPlacesByDest((prev) => ({
-                    ...prev,
-                    [destination]: placeResults.flatMap((p) => (p ? [p] : []))
-                }))
-            }
+            )
+
+            setAttractionPlacesByDest((prev) => ({
+                ...prev,
+                [destination]: placeResults.flatMap((p) => (p ? [p] : []))
+            }))
         } catch {
             setAttractionsErrorByDest((prev) => ({
                 ...prev,
@@ -715,6 +737,7 @@ export default function TripAdd() {
         setSelectedAttractionsByDest((prev) => {
             const current = prev[destination] ?? []
             const exists = current.some((a) => a.name === option.name)
+
             return {
                 ...prev,
                 [destination]: exists
@@ -732,36 +755,63 @@ export default function TripAdd() {
         setActiveStep((prev) => Math.max(prev - 1, 0))
     }
 
-    function saveTrip() {
-        const id = `${slugify(tripName)}-${Date.now().toString().slice(-6)}`
+    async function saveTrip() {
+        if (saving) return
 
-        const plannedTrip: PlannedTrip = {
-            id,
-            name: tripName,
-            startDate,
-            endDate,
-            budget,
-            destinations,
-            flights,
-            selectedFlight,
-            transportationNotes,
-            navigationPlans,
-            accommodations: Object.values(accommodationsByDest).flat(),
-            selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
-            attractions: Object.values(attractionsByDest).flat(),
-            selectedAttractions: Object.values(selectedAttractionsByDest).flat(),
-            estimatedTotal,
-            members: 1,
-            createdAt: new Date().toISOString()
+        setSaving(true)
+        setSaveError(null)
+
+        try {
+            const id = `${slugify(tripName)}-${Date.now().toString().slice(-6)}`
+
+            const plannedTrip: PlannedTrip = {
+                id,
+                name: tripName,
+                startDate,
+                endDate,
+                budget,
+                destinations,
+                flights,
+                selectedFlight,
+                transportationNotes,
+                navigationPlans,
+                accommodations: Object.values(accommodationsByDest).flat(),
+                selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
+                attractions: Object.values(attractionsByDest).flat().map((item) => ({
+                    ...item,
+                    reviews: item.reviews.map((review) => ({
+                        authorName: review.author,
+                        rating: review.rating,
+                        text: review.text,
+                        publishTime: review.relativeTime
+                    }))
+                })),
+                selectedAttractions: Object.values(selectedAttractionsByDest).flat().map((item) => ({
+                    ...item,
+                    reviews: item.reviews.map((review) => ({
+                        authorName: review.author,
+                        rating: review.rating,
+                        text: review.text,
+                        publishTime: review.relativeTime
+                    }))
+                })),
+                estimatedTotal,
+                members: 1,
+                createdAt: new Date().toISOString()
+            }
+
+            const saved = await savePlannedTrip(plannedTrip)
+            navigate(`/trips/${saved?.id ?? id}`)
+        } catch (e: any) {
+            setSaveError(e?.response?.data?.error ?? e?.message ?? "Failed to save trip.")
+        } finally {
+            setSaving(false)
         }
-
-        savePlannedTrip(plannedTrip)
-        navigate(`/trips/${id}`)
     }
 
     return (
         <AppLayout>
-            <Page title="Create a Trip" subtitle="Plan step-by-step. For now this saves to local state only for display.">
+            <Page title="Create a Trip" subtitle="Plan step-by-step and save your trip.">
                 <Box sx={{ display: "grid", gap: 3 }}>
                     <Stepper activeStep={activeStep} alternativeLabel>
                         {stepTitles.map((title) => (
@@ -770,6 +820,8 @@ export default function TripAdd() {
                             </Step>
                         ))}
                     </Stepper>
+
+                    {saveError && <Alert severity="error">{saveError}</Alert>}
 
                     <Paper elevation={0} sx={{ p: 3, borderRadius: 3 }}>
                         {activeStep === 0 && (
@@ -780,20 +832,29 @@ export default function TripAdd() {
                                     onChange={(e) => setTripName(e.target.value)}
                                     fullWidth
                                 />
-                                <TextField
-                                    label="Start date"
-                                    type="date"
-                                    InputLabelProps={{ shrink: true }}
-                                    value={startDate}
-                                    onChange={(e) => setStartDate(e.target.value)}
-                                />
-                                <TextField
-                                    label="End date"
-                                    type="date"
-                                    InputLabelProps={{ shrink: true }}
-                                    value={endDate}
-                                    onChange={(e) => setEndDate(e.target.value)}
-                                />
+
+                                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                                    <TextField
+                                        label="Start date"
+                                        type="date"
+                                        InputLabelProps={{ shrink: true }}
+                                        value={startDate}
+                                        onChange={(e) => setStartDate(e.target.value)}
+                                        error={!!dateError}
+                                        fullWidth
+                                    />
+                                    <TextField
+                                        label="End date"
+                                        type="date"
+                                        InputLabelProps={{ shrink: true }}
+                                        value={endDate}
+                                        onChange={(e) => setEndDate(e.target.value)}
+                                        error={!!dateError}
+                                        helperText={dateError ?? " "}
+                                        fullWidth
+                                    />
+                                </Stack>
+
                                 <Typography color="text.secondary">Trip window: {tripDates}</Typography>
                             </Stack>
                         )}
@@ -900,10 +961,7 @@ export default function TripAdd() {
 
                                         {mapsApiKey && resolvedFlightAirports.length > 0 && (
                                             <APIProvider apiKey={mapsApiKey}>
-                                                <AirportPinsMap
-                                                    airports={resolvedFlightAirports}
-                                                    mapId={mapId}
-                                                />
+                                                <AirportPinsMap airports={resolvedFlightAirports} mapId={mapId} />
                                             </APIProvider>
                                         )}
 
@@ -915,6 +973,80 @@ export default function TripAdd() {
                                                 setSelectedFlight(flight)
                                             }}
                                         />
+                                    </>
+                                )}
+
+                                {transportMode !== "flight" && (
+                                    <>
+                                        {mapsApiKey ? (
+                                            <APIProvider apiKey={mapsApiKey}>
+                                                <Stack spacing={2}>
+                                                    <TripRouteMap
+                                                        loading={false}
+                                                        places={resolvedPlaces}
+                                                        legs={routesByLeg}
+                                                        selectedRouteByLeg={selectedRouteByLeg}
+                                                        mapId={mapId}
+                                                    />
+
+                                                    {routesByLeg.map((leg, legIndex) => (
+                                                        <Paper
+                                                            key={`${leg.origin}-${leg.destination}`}
+                                                            elevation={0}
+                                                            sx={{ p: 2, borderRadius: 2, border: "1px solid rgba(47,65,86,0.12)" }}
+                                                        >
+                                                            <Typography sx={{ fontWeight: 700, mb: 1 }}>
+                                                                {leg.origin} → {leg.destination}
+                                                            </Typography>
+
+                                                            <Stack direction="row" spacing={1} flexWrap="wrap">
+                                                                {(routeOptionsByLeg[legIndex] ?? []).map((r, routeIndex) => {
+                                                                    const selected = (selectedRouteByLeg[legIndex] ?? 0) === routeIndex
+
+                                                                    return (
+                                                                        <Chip
+                                                                            key={`${legIndex}-${routeIndex}`}
+                                                                            label={`Option ${routeIndex + 1} • ${r.label} • ${r.duration} • ${toCurrency(r.estimatedCost)}`}
+                                                                            color={selected ? "primary" : "default"}
+                                                                            onClick={() =>
+                                                                                setSelectedRouteByLeg((prev) => ({
+                                                                                    ...prev,
+                                                                                    [legIndex]: routeIndex
+                                                                                }))
+                                                                            }
+                                                                            sx={{ mb: 1 }}
+                                                                        />
+                                                                    )
+                                                                })}
+                                                            </Stack>
+                                                        </Paper>
+                                                    ))}
+                                                </Stack>
+                                            </APIProvider>
+                                        ) : (
+                                            <Alert severity="info">Add VITE_GOOGLE_API_KEY to enable route maps.</Alert>
+                                        )}
+
+                                        {navigationPlans.length > 0 && (
+                                            <Stack spacing={1}>
+                                                {navigationPlans.map((plan) => (
+                                                    <Paper key={`${plan.origin}-${plan.destination}`} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                                                        <Typography sx={{ fontWeight: 700 }}>
+                                                            {plan.origin} → {plan.destination}
+                                                        </Typography>
+                                                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                                                            Method: {plan.method ?? "driving"} • ETA: {plan.estimatedDuration ?? "Unknown"}
+                                                        </Typography>
+                                                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                                            Estimated cost: {toCurrency(plan.estimatedCost ?? 0)}
+                                                        </Typography>
+                                                        <Button href={plan.mapsUrl} target="_blank" rel="noreferrer" size="small" variant="text">
+                                                            Open navigation in Google Maps
+                                                        </Button>
+                                                    </Paper>
+                                                ))}
+                                            </Stack>
+                                        )}
                                     </>
                                 )}
                             </Stack>
@@ -940,14 +1072,12 @@ export default function TripAdd() {
                                     </Button>
                                 </Stack>
 
-                                {/* Progress indicator: how many destinations have a selection */}
                                 {destinations.length > 1 && (
                                     <Typography variant="body2" color="text.secondary">
                                         {Object.keys(selectedAccommodationByDest).length} of {destinations.length} destinations have a stay selected.
                                     </Typography>
                                 )}
 
-                                {/* Destination tab strip — only shown when >1 destination */}
                                 {destinations.length > 1 && (
                                     <Tabs
                                         value={activeAccommodationTab}
@@ -962,6 +1092,7 @@ export default function TripAdd() {
                                         {destinations.map((dest, idx) => {
                                             const isLoading = accommodationsLoadingByDest[dest]
                                             const hasSelection = Boolean(selectedAccommodationByDest[dest])
+
                                             return (
                                                 <Tab
                                                     key={dest}
@@ -975,7 +1106,8 @@ export default function TripAdd() {
                                                             {!isLoading && hasSelection && (
                                                                 <Box
                                                                     sx={{
-                                                                        width: 8, height: 8,
+                                                                        width: 8,
+                                                                        height: 8,
                                                                         borderRadius: "50%",
                                                                         bgcolor: "success.main",
                                                                         flexShrink: 0
@@ -990,7 +1122,6 @@ export default function TripAdd() {
                                     </Tabs>
                                 )}
 
-                                {/* Panel for the active destination */}
                                 {destinations.map((dest, idx) => {
                                     if (idx !== activeAccommodationTab) return null
 
@@ -1040,7 +1171,6 @@ export default function TripAdd() {
                                                             overflow: "hidden"
                                                         }}
                                                     >
-                                                        {/* ── Main card row ── */}
                                                         <Box
                                                             sx={{ p: 2, cursor: "pointer" }}
                                                             onClick={() =>
@@ -1059,7 +1189,6 @@ export default function TripAdd() {
                                                                     </Typography>
                                                                 </Box>
 
-                                                                {/* Overall rating badge */}
                                                                 {stay.rating != null && (
                                                                     <Stack alignItems="center" spacing={0}>
                                                                         <Box
@@ -1087,7 +1216,6 @@ export default function TripAdd() {
                                                             </Stack>
                                                         </Box>
 
-                                                        {/* ── Reviews toggle ── */}
                                                         {stay.reviews.length > 0 && (
                                                             <>
                                                                 <Divider />
@@ -1132,7 +1260,8 @@ export default function TripAdd() {
                                                                                         ) : (
                                                                                             <Box
                                                                                                 sx={{
-                                                                                                    width: 28, height: 28,
+                                                                                                    width: 28,
+                                                                                                    height: 28,
                                                                                                     borderRadius: "50%",
                                                                                                     bgcolor: "primary.light",
                                                                                                     display: "flex",
@@ -1179,13 +1308,13 @@ export default function TripAdd() {
                                     )
                                 })}
 
-                                {/* Summary of all selections when >1 destination */}
                                 {destinations.length > 1 && Object.keys(selectedAccommodationByDest).length > 0 && (
                                     <Paper elevation={0} sx={{ p: 2, borderRadius: 2, bgcolor: "rgba(47,65,86,0.04)" }}>
                                         <Typography sx={{ fontWeight: 700, mb: 1 }}>Selected stays</Typography>
                                         <Stack spacing={0.5}>
                                             {destinations.map((dest) => {
                                                 const sel = selectedAccommodationByDest[dest]
+
                                                 return (
                                                     <Stack key={dest} direction="row" justifyContent="space-between">
                                                         <Typography variant="body2" sx={{ fontWeight: 600 }}>{dest}</Typography>
@@ -1228,14 +1357,12 @@ export default function TripAdd() {
                                     </Stack>
                                 </Stack>
 
-                                {/* Progress counter */}
                                 {destinations.length > 1 && (
                                     <Typography variant="body2" color="text.secondary">
                                         {Object.values(selectedAttractionsByDest).filter((a) => a.length > 0).length} of {destinations.length} destinations have attractions selected.
                                     </Typography>
                                 )}
 
-                                {/* Destination tab strip */}
                                 {destinations.length > 1 && (
                                     <Tabs
                                         value={activeAttractionTab}
@@ -1250,6 +1377,7 @@ export default function TripAdd() {
                                         {destinations.map((dest, idx) => {
                                             const isLoading = attractionsLoadingByDest[dest]
                                             const count = (selectedAttractionsByDest[dest] ?? []).length
+
                                             return (
                                                 <Tab
                                                     key={dest}
@@ -1285,7 +1413,6 @@ export default function TripAdd() {
                                     </Tabs>
                                 )}
 
-                                {/* Panel for active destination */}
                                 {destinations.map((dest, idx) => {
                                     if (idx !== activeAttractionTab) return null
 
@@ -1336,7 +1463,6 @@ export default function TripAdd() {
                                                             overflow: "hidden"
                                                         }}
                                                     >
-                                                        {/* ── Main card row ── */}
                                                         <Box
                                                             sx={{ p: 2, cursor: "pointer" }}
                                                             onClick={() => toggleAttractionForDest(dest, item)}
@@ -1375,13 +1501,13 @@ export default function TripAdd() {
                                                             </Stack>
                                                         </Box>
 
-                                                        {/* ── Reviews toggle ── */}
                                                         {item.reviews.length > 0 && (
                                                             <>
                                                                 <Divider />
                                                                 <Box
                                                                     sx={{
-                                                                        px: 2, py: 0.75,
+                                                                        px: 2,
+                                                                        py: 0.75,
                                                                         cursor: "pointer",
                                                                         display: "flex",
                                                                         alignItems: "center",
@@ -1417,17 +1543,20 @@ export default function TripAdd() {
                                                                                                 sx={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
                                                                                             />
                                                                                         ) : (
-                                                                                            <Box sx={{
-                                                                                                width: 28, height: 28,
-                                                                                                borderRadius: "50%",
-                                                                                                bgcolor: "primary.light",
-                                                                                                display: "flex",
-                                                                                                alignItems: "center",
-                                                                                                justifyContent: "center",
-                                                                                                color: "#fff",
-                                                                                                fontSize: "0.75rem",
-                                                                                                fontWeight: 700
-                                                                                            }}>
+                                                                                            <Box
+                                                                                                sx={{
+                                                                                                    width: 28,
+                                                                                                    height: 28,
+                                                                                                    borderRadius: "50%",
+                                                                                                    bgcolor: "primary.light",
+                                                                                                    display: "flex",
+                                                                                                    alignItems: "center",
+                                                                                                    justifyContent: "center",
+                                                                                                    color: "#fff",
+                                                                                                    fontSize: "0.75rem",
+                                                                                                    fontWeight: 700
+                                                                                                }}
+                                                                                            >
                                                                                                 {review.author.charAt(0).toUpperCase()}
                                                                                             </Box>
                                                                                         )}
@@ -1459,7 +1588,6 @@ export default function TripAdd() {
                                                 )
                                             })}
 
-                                            {/* Map for this destination's attractions */}
                                             {mapsApiKey && placesForDest.length > 0 && (
                                                 <APIProvider apiKey={mapsApiKey}>
                                                     <TripRouteMap
@@ -1475,7 +1603,6 @@ export default function TripAdd() {
                                     )
                                 })}
 
-                                {/* Cross-destination summary */}
                                 {destinations.length > 1 && Object.values(selectedAttractionsByDest).some((a) => a.length > 0) && (
                                     <Paper elevation={0} sx={{ p: 2, borderRadius: 2, bgcolor: "rgba(47,65,86,0.04)" }}>
                                         <Typography sx={{ fontWeight: 700, mb: 1 }}>Selected attractions</Typography>
@@ -1483,6 +1610,7 @@ export default function TripAdd() {
                                             {destinations.map((dest) => {
                                                 const sel = selectedAttractionsByDest[dest] ?? []
                                                 if (sel.length === 0) return null
+
                                                 return (
                                                     <Box key={dest}>
                                                         <Typography variant="body2" sx={{ fontWeight: 600 }}>{dest}</Typography>
@@ -1535,22 +1663,26 @@ export default function TripAdd() {
                     <Divider />
 
                     <Stack direction="row" spacing={1} justifyContent="space-between">
-                        <Button variant="outlined" onClick={goBack} disabled={activeStep === 0}>
+                        <Button variant="outlined" onClick={goBack} disabled={activeStep === 0 || saving}>
                             Back
                         </Button>
 
                         <Stack direction="row" spacing={1}>
-                            <Button variant="text" onClick={() => navigate("/dashboard")}>
+                            <Button variant="text" onClick={() => navigate("/dashboard")} disabled={saving}>
                                 Cancel
                             </Button>
 
                             {activeStep < stepTitles.length - 1 ? (
-                                <Button variant="contained" onClick={goNext} disabled={!canContinue}>
+                                <Button variant="contained" onClick={goNext} disabled={!canContinue || saving}>
                                     Next
                                 </Button>
                             ) : (
-                                <Button variant="contained" onClick={saveTrip} disabled={!tripName || destinations.length === 0}>
-                                    Save Trip
+                                <Button
+                                    variant="contained"
+                                    onClick={saveTrip}
+                                    disabled={saving || !tripName || destinations.length === 0}
+                                >
+                                    {saving ? "Saving..." : "Save Trip"}
                                 </Button>
                             )}
                         </Stack>

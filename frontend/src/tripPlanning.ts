@@ -25,11 +25,21 @@ export type StayOption = {
     nightlyRate: number;
 };
 
+export type AttractionReview = {
+    authorName: string;
+    rating: number;
+    text: string;
+    publishTime?: string;
+};
+
 export type AttractionOption = {
     name: string;
     location: string;
     price: number;
     source: "google_places" | "mock";
+    placeId?: string;
+    rating?: number;
+    reviews?: AttractionReview[];
 };
 
 export type NavigationPlan = {
@@ -45,8 +55,10 @@ export type NavigationPlan = {
 };
 
 export type PlannedTrip = {
+    // Mongo _id string
     id: string;
 
+    // backend -> frontend mapping
     name: string;
     startDate: string;
     endDate: string;
@@ -82,7 +94,11 @@ function mongoToPlannedTrip(doc: any): PlannedTrip {
         startDate: doc.startDate,
         endDate: doc.endDate,
         budget: doc.budget?.computed?.plannedTotal ?? doc.budget?.totalBudget ?? 0,
-        destinations: doc.destination ? [doc.destination] : [],
+        destinations: Array.isArray(doc.destinations)
+            ? doc.destinations
+            : doc.destination
+                ? [doc.destination]
+                : [],
         flights: doc.itinerary?.flights ?? [],
         selectedFlight: doc.itinerary?.selectedFlight ?? undefined,
         transportationNotes: doc.itinerary?.transportationNotes ?? "",
@@ -133,6 +149,7 @@ export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
     const payload = {
         title: trip.name,
         destination,
+        destinations: trip.destinations ?? [],
         startDate: trip.startDate,
         endDate: trip.endDate,
         notes: "",
@@ -179,6 +196,7 @@ export async function updatePlannedTrip(
         {
             title: next.name,
             destination: next.destinations?.[0] ?? "",
+            destinations: next.destinations ?? [],
             startDate: next.startDate,
             endDate: next.endDate,
         },

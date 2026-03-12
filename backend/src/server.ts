@@ -8,8 +8,12 @@ import cookieParser from "cookie-parser";
 import tripsRouter from "./routes/trips";
 import transportRouter from "./routes/transport";
 import accommodationRouter from "./routes/accommodation"
+import calendarRouter from "./routes/calendar";
 
-const app = express()
+const { loadEnvFile } = require("node:process");
+loadEnvFile();
+
+const app = express();
 
 app.get("/ping", (req, res) => res.status(200).send("pong"));
 
@@ -19,7 +23,7 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json())
+app.use(express.json());
 app.use(cookieParser());
 app.use("/api/trips", tripsRouter);
 app.use("/api/transport", transportRouter);
@@ -28,25 +32,26 @@ app.use('/api/relations', relationsRouter)
 app.use('/api/users', usersRouter)
 app.use('/api/accommodations', accommodationRouter)
 
-// Load environment variables from the .env file
-const { loadEnvFile } = require('node:process');
-loadEnvFile();
+// Routes (mount AFTER middleware)
+app.use("/api/auth", authRouter);
+app.use("/api/trips", tripsRouter);
+app.use("/api/calendar", calendarRouter);
 
 // Test route
-app.get('/api/health', (req: Request, res: Response) => {
-    res.json({ ok: true, message: 'TypeScript backend is running' })
-})
+app.get("/api/health", (req: Request, res: Response) => {
+    res.json({ ok: true, message: "TypeScript backend is running" });
+});
 
-const PORT = process.env.PORT ? Number(process.env.PORT) : 5001
+const PORT = process.env.PORT ? Number(process.env.PORT) : 5001;
 
 app.listen(PORT, () => {
-    console.log(`API listening on http://localhost:${PORT}`)
-})
+    console.log(`API listening on http://localhost:${PORT}`);
+});
 
 // Connect to DB
 connectToDatabase();
 
-// Graceful Shutdown Handlers
+// Graceful Shutdown
 process.on("SIGINT", () => {
     closeDatabaseConnection();
     process.exit(0);
