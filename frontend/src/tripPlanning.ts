@@ -26,9 +26,11 @@ export type StayOption = {
 };
 
 export type AttractionReview = {
-  authorName: string;
+  author: string;
+  authorPhotoUri?: string;
   rating: number;
   text: string;
+  relativeTime?: string;
   publishTime?: string;
 };
 

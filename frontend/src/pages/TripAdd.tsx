@@ -21,6 +21,7 @@ import AppLayout from "../components/AppLayout"
 import Page from "../components/Page"
 import {
     type AttractionOption,
+    type AttractionReview,
     type FlightOption,
     type NavigationPlan,
     type PlannedTrip,
@@ -81,13 +82,6 @@ type StayOptionWithReviews = StayOption & {
     reviews: StayReview[]
 }
 
-type AttractionReview = {
-    author: string
-    authorPhotoUri?: string
-    rating: number
-    text: string
-    relativeTime: string
-}
 
 type AttractionOptionWithReviews = AttractionOption & {
     rating?: number
