@@ -2,14 +2,10 @@ import express, { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { connectToDatabase, getCollection } from "../config/database";
 import type { Trip, Budget, Itinerary } from "../types";
-<<<<<<< HEAD
 import { getSession } from "../sessionStore";
 
-=======
-import { getSession } from "../SessionStore";
-import calendarRouter from "./calendar"
->>>>>>> a67dfc2 (Add trip calendar month and week views and budget feature addition)
 const router = express.Router();
+
 
 
 function getParam(req: Request, name: string): string {
