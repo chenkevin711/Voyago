@@ -2,7 +2,7 @@ import express, { Request, Response, Router, CookieOptions } from "express";
 import argon2 from "argon2";
 import crypto from "crypto";
 import { getCollection } from "../config/database";
-import { setSession, deleteSession } from "../sessionStore";
+import { getSession, setSession, deleteSession } from "../sessionStore";
 import { User, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse } from "../types";
 
 const router: Router = express.Router();
@@ -102,6 +102,26 @@ router.post("/register", async (req: Request, res: Response) => {
     console.error("Register error:", e);
     return res.status(500).json({ success: false, message: "An error occurred during register" } as RegisterResponse);
   }
+});
+
+/**
+ * GET /api/auth/me
+ *
+ * Returns the current user's id and username from their session cookie.
+ * No DB query — data is already in the session store.
+ */
+router.get("/me", (req: Request, res: Response) => {
+  const token = req.cookies?.token;
+  if (!token) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
+    return;
+  }
+  const session = getSession(token);
+  if (!session?.userId) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
+    return;
+  }
+  res.status(200).json({ success: true, userId: session.userId, username: session.username });
 });
 
 router.post("/logout", (req: Request, res: Response) => {

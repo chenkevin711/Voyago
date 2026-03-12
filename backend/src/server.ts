@@ -1,58 +1,62 @@
-import express, { Request, Response } from 'express'
-import cors from 'cors'
-import { connectToDatabase, closeDatabaseConnection } from './config/database'
-import authRouter from './routes/auth'
-import relationsRouter from './routes/relations'
-import usersRouter from './routes/users'
+import http from "http";
+import express, { Request, Response } from "express";
+import cors from "cors";
 import cookieParser from "cookie-parser";
+import { connectToDatabase, closeDatabaseConnection } from "./config/database";
+import { attachSocketServer } from "./socketServer";
+import authRouter from "./routes/auth";
+import relationsRouter from "./routes/relations";
+import usersRouter from "./routes/users";
+import messagesRouter from "./routes/messages";
 import tripsRouter from "./routes/trips";
 import transportRouter from "./routes/transport";
-import accommodationRouter from "./routes/accommodation"
+import accommodationRouter from "./routes/accommodation";
 
-const app = express()
-
-app.get("/ping", (req, res) => res.status(200).send("pong"));
-
-// Middleware
-app.use(cors({
-    origin: "http://localhost:5173", // frontend dev server
-    credentials: true
-}));
-
-app.use(express.json())
-app.use(cookieParser());
-app.use("/api/trips", tripsRouter);
-app.use("/api/transport", transportRouter);
-app.use('/api/auth', authRouter)
-app.use('/api/relations', relationsRouter)
-app.use('/api/users', usersRouter)
-app.use('/api/accommodations', accommodationRouter)
-
-// Load environment variables from the .env file
-const { loadEnvFile } = require('node:process');
+const { loadEnvFile } = require("node:process");
 loadEnvFile();
 
-// Test route
-app.get('/api/health', (req: Request, res: Response) => {
-    res.json({ ok: true, message: 'TypeScript backend is running' })
-})
+const app = express();
+const httpServer = http.createServer(app);
 
-const PORT = process.env.PORT ? Number(process.env.PORT) : 5001
+app.get("/ping", (_req, res) => res.status(200).send("pong"));
 
-app.listen(PORT, () => {
-    console.log(`API listening on http://localhost:${PORT}`)
-})
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  })
+);
+app.use(express.json());
+app.use(cookieParser());
 
-// Connect to DB
+app.use("/api/auth", authRouter);
+app.use("/api/relations", relationsRouter);
+app.use("/api/users", usersRouter);
+app.use("/api/messages", messagesRouter);
+app.use("/api/trips", tripsRouter);
+app.use("/api/transport", transportRouter);
+app.use("/api/accommodations", accommodationRouter);
+
+app.get("/api/health", (_req: Request, res: Response) => {
+  res.json({ ok: true, message: "TypeScript backend is running" });
+});
+
+const PORT = process.env.PORT ? Number(process.env.PORT) : 5001;
+
+attachSocketServer(httpServer);
+
+httpServer.listen(PORT, () => {
+  console.log(`API + WS listening on http://localhost:${PORT}`);
+});
+
 connectToDatabase();
 
-// Graceful Shutdown Handlers
 process.on("SIGINT", () => {
-    closeDatabaseConnection();
-    process.exit(0);
+  closeDatabaseConnection();
+  process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-    closeDatabaseConnection();
-    process.exit(0);
+  closeDatabaseConnection();
+  process.exit(0);
 });

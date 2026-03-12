@@ -24,10 +24,14 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import BlockIcon from "@mui/icons-material/Block";
 import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import ChatIcon from "@mui/icons-material/Chat";
 import { Link as RouterLink } from "react-router-dom";
 import axios from "axios";
 import { useCookies } from "react-cookie";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSocket, useUnreadCount } from "../hooks/useSocket";
+import ChatDrawer from "./ChatDrawer";
 
 interface PendingUser {
     id: string;
@@ -36,9 +40,9 @@ interface PendingUser {
 }
 
 export default function Navbar() {
-    const [cookies, , removeCookie] = useCookies(["loggedIn"]);
+    const [cookies, , removeCookie] = useCookies(["loggedIn", "username"]);
 
-    // Notification popover state
+    // ── Friend-request notifications ─────────────────────────────────────────
     const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
     const [pendingRequests, setPendingRequests] = useState<PendingUser[]>([]);
     const [loading, setLoading] = useState(false);
@@ -53,11 +57,10 @@ export default function Navbar() {
             const { data } = await axios.get("/api/relations/pending");
             if (data.success) setPendingRequests(data.users ?? []);
         } catch {
-            // silently ignore – user may not be logged in yet
+            // silently ignore
         }
     }, [cookies.loggedIn]);
 
-    // Poll every 30 seconds for new requests
     useEffect(() => {
         if (cookies.loggedIn) {
             fetchPending();
@@ -125,6 +128,22 @@ export default function Navbar() {
         }
     };
 
+    const [chatOpen, setChatOpen] = useState(false);
+    const { onMessage } = useSocket();
+    const { unreadCount, setUnreadCount, refetch: refetchUnread } = useUnreadCount(onMessage, chatOpen);
+    const [currentUserId, setCurrentUserId] = useState("");
+    useEffect(() => {
+        if (!cookies.loggedIn) return;
+        axios
+            .get("/api/auth/me")
+            .then(({ data }) => { if (data.success) setCurrentUserId(data.userId); })
+            .catch(() => {});
+    }, [cookies.loggedIn]);
+
+    const handleOpenChat = () => {
+        setChatOpen(true);
+    };
+
     const AuthButtons = () => (
         <>
             <Button component={RouterLink} to="/login" sx={{ color: "primary.main" }}>
@@ -145,18 +164,22 @@ export default function Navbar() {
                 Profile
             </Button>
 
-            {/* Friends page shortcut */}
             <Tooltip title="Friends">
-                <IconButton
-                    component={RouterLink}
-                    to="/friends"
-                    sx={{ color: "primary.main" }}
-                >
+                <IconButton component={RouterLink} to="/friends" sx={{ color: "primary.main" }}>
                     <PeopleAltOutlinedIcon />
                 </IconButton>
             </Tooltip>
 
-            {/* Notification bell */}
+            {/* Messages */}
+            <Tooltip title="Messages">
+                <IconButton onClick={handleOpenChat} sx={{ color: "primary.main" }}>
+                    <Badge badgeContent={unreadCount} color="error" max={99}>
+                        {unreadCount > 0 ? <ChatIcon /> : <ChatBubbleOutlineIcon />}
+                    </Badge>
+                </IconButton>
+            </Tooltip>
+
+            {/* Friend-request notifications */}
             <Tooltip title="Friend requests">
                 <IconButton onClick={openPopover} sx={{ color: "primary.main" }}>
                     <Badge badgeContent={pendingRequests.length} color="error" max={99}>
@@ -181,32 +204,23 @@ export default function Navbar() {
                 position="sticky"
                 elevation={0}
                 sx={{
-                    bgcolor: "rgba(245, 239, 235, 0.85)",
-                    backdropFilter: "blur(12px)",
-                    borderBottom: "1px solid rgba(47, 65, 86, 0.1)",
+                    bgcolor: "#FDFAF8",
+                    borderBottom: "1px solid rgba(47, 65, 86, 0.08)",
                 }}
             >
-                <Toolbar
-                    sx={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        maxWidth: "1200px",
-                        width: "100%",
-                        margin: "0 auto",
-                    }}
-                >
+                <Toolbar sx={{ justifyContent: "space-between" }}>
                     <Typography
                         component={RouterLink}
                         to="/"
                         sx={{
-                            textDecoration: "none",
                             fontFamily: "Playfair Display",
-                            fontSize: 26,
+                            fontSize: 22,
+                            fontWeight: 700,
                             color: "primary.main",
-                            letterSpacing: 1,
+                            textDecoration: "none",
                         }}
                     >
-                        Voyago
+                        Wanderly
                     </Typography>
 
                     <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
@@ -215,7 +229,7 @@ export default function Navbar() {
                 </Toolbar>
             </AppBar>
 
-            {/* Notifications Popover */}
+            {/* Friend Requests Popover */}
             <Popover
                 open={Boolean(anchorEl)}
                 anchorEl={anchorEl}
@@ -234,7 +248,6 @@ export default function Navbar() {
                     },
                 }}
             >
-                {/* Header */}
                 <Box
                     sx={{
                         px: 2.5,
@@ -266,7 +279,6 @@ export default function Navbar() {
                     </Button>
                 </Box>
 
-                {/* Body */}
                 {loading ? (
                     <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
                         <CircularProgress size={28} />
@@ -372,6 +384,16 @@ export default function Navbar() {
                 )}
             </Popover>
 
+            {/* Chat Drawer */}
+            {cookies.loggedIn && (
+                <ChatDrawer
+                    open={chatOpen}
+                    onClose={() => setChatOpen(false)}
+                    currentUserId={currentUserId}
+                    onUnreadChange={refetchUnread}
+                />
+            )}
+
             {/* Toast feedback */}
             <Snackbar
                 open={Boolean(toast)}
@@ -379,11 +401,7 @@ export default function Navbar() {
                 onClose={() => setToast(null)}
                 anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
             >
-                <Alert
-                    severity={toast?.severity}
-                    onClose={() => setToast(null)}
-                    sx={{ borderRadius: 2 }}
-                >
+                <Alert severity={toast?.severity} onClose={() => setToast(null)} sx={{ borderRadius: 2 }}>
                     {toast?.message}
                 </Alert>
             </Snackbar>
