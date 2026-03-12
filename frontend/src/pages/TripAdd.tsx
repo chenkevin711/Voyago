@@ -95,12 +95,6 @@ type AttractionOptionWithReviews = AttractionOption & {
     reviews: AttractionReview[]
 }
 
-type RouteAlt = {
-    distanceMeters: number
-    duration: string
-    encodedPolyline: string
-}
-
 function slugify(value: string): string {
     return value
         .toLowerCase()
@@ -145,7 +139,6 @@ export default function TripAdd() {
     const [flightLoading, setFlightLoading] = useState(false)
     const [transportOriginInput, setTransportOriginInput] = useState("")
     const [originAirport, setOriginAirport] = useState<ResolvedAirport | null>(null)
-    const [destinationAirport, setDestinationAirport] = useState<ResolvedAirport | null>(null)
     const [resolvedFlightAirports, setResolvedFlightAirports] = useState<ResolvedAirport[]>([])
     const [transportError, setTransportError] = useState<string | null>(null)
 
@@ -385,7 +378,6 @@ export default function TripAdd() {
             }
 
             setOriginAirport(firstOriginAirport)
-            setDestinationAirport(firstDestinationAirport)
             setResolvedFlightAirports(dedupeAirports(collectedAirports))
             setLegFlightPlans(plans)
             setSelectedFlightsByLeg(selectedByLeg)
@@ -400,7 +392,6 @@ export default function TripAdd() {
             setSelectedFlightsByLeg({})
             setResolvedFlightAirports([])
             setOriginAirport(null)
-            setDestinationAirport(null)
         } finally {
             setFlightLoading(false)
         }
@@ -418,7 +409,6 @@ export default function TripAdd() {
                 setOriginAirport(resolved)
                 setResolvedFlightAirports((prev) => dedupeAirports([...prev, resolved]))
             } else {
-                setDestinationAirport(resolved)
                 setResolvedFlightAirports((prev) => dedupeAirports([...prev, resolved]))
             }
         } catch {
