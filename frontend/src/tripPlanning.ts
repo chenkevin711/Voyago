@@ -25,11 +25,28 @@ export type StayOption = {
     nightlyRate: number;
 };
 
+export type AttractionReview = {
+  authorName: string;
+  rating: number;
+  text: string;
+  publishTime?: string;
+};
+
 export type AttractionOption = {
+<<<<<<< HEAD
     name: string;
     location: string;
     price: number;
     source: "google_places" | "mock";
+=======
+  name: string;
+  location: string;
+  price: number;
+  source: "google_places" | "mock";
+  placeId?: string;
+  rating?: number;
+  reviews?: AttractionReview[];
+>>>>>>> 7d00daa (Add Google Places attraction reviews and display them in Trip Overview)
 };
 
 export type NavigationPlan = {
@@ -76,6 +93,7 @@ export type PlannedTrip = {
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
 function mongoToPlannedTrip(doc: any): PlannedTrip {
+<<<<<<< HEAD
     return {
         id: doc._id,
         name: doc.title ?? "Untitled Trip",
@@ -95,6 +113,31 @@ function mongoToPlannedTrip(doc: any): PlannedTrip {
         members: doc.itinerary?.members ?? 1,
         createdAt: doc.createdAt ?? new Date().toISOString(),
     };
+=======
+  return {
+    id: doc._id,
+    name: doc.title ?? "Untitled Trip",
+    startDate: doc.startDate,
+    endDate: doc.endDate,
+    budget: doc.budget?.computed?.plannedTotal ?? doc.budget?.totalBudget ?? 0,
+    destinations: Array.isArray(doc.destinations)
+      ? doc.destinations
+      : doc.destination
+      ? [doc.destination]
+      : [],
+    flights: doc.itinerary?.flights ?? [],
+    selectedFlight: doc.itinerary?.selectedFlight ?? undefined,
+    transportationNotes: doc.itinerary?.transportationNotes ?? "",
+    navigationPlans: doc.itinerary?.navigationPlans ?? [],
+    accommodations: doc.itinerary?.accommodations ?? [],
+    selectedAccommodation: doc.itinerary?.selectedAccommodation ?? undefined,
+    attractions: doc.itinerary?.attractions ?? [],
+    selectedAttractions: doc.itinerary?.selectedAttractions ?? [],
+    estimatedTotal: doc.itinerary?.estimatedTotal ?? 0,
+    members: doc.itinerary?.members ?? 1,
+    createdAt: doc.createdAt ?? new Date().toISOString(),
+  };
+>>>>>>> 7d00daa (Add Google Places attraction reviews and display them in Trip Overview)
 }
 
 /**
@@ -130,6 +173,7 @@ export async function getPlannedTripById(id: string): Promise<PlannedTrip | unde
 export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
     const destination = trip.destinations?.[0] ?? "";
 
+<<<<<<< HEAD
     const payload = {
         title: trip.name,
         destination,
@@ -150,6 +194,29 @@ export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
             updatedAt: new Date().toISOString(),
         },
     };
+=======
+  const payload = {
+    title: trip.name,
+    destination,
+    destinations: trip.destinations ?? [],
+    startDate: trip.startDate,
+    endDate: trip.endDate,
+    notes: "",
+    itinerary: {
+      flights: trip.flights ?? [],
+      selectedFlight: trip.selectedFlight ?? null,
+      transportationNotes: trip.transportationNotes ?? "",
+      navigationPlans: trip.navigationPlans ?? [],
+      accommodations: trip.accommodations ?? [],
+      selectedAccommodation: trip.selectedAccommodation ?? null,
+      attractions: trip.attractions ?? [],
+      selectedAttractions: trip.selectedAttractions ?? [],
+      estimatedTotal: trip.estimatedTotal ?? 0,
+      members: trip.members ?? 1,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+>>>>>>> 7d00daa (Add Google Places attraction reviews and display them in Trip Overview)
 
     const { data } = await axios.post(`${API_BASE}/api/trips`, payload, {
         withCredentials: true,
@@ -174,6 +241,7 @@ export async function updatePlannedTrip(
 
     const next = updater(current);
 
+<<<<<<< HEAD
     await axios.patch(
         `${API_BASE}/api/trips/${id}`,
         {
@@ -184,6 +252,19 @@ export async function updatePlannedTrip(
         },
         { withCredentials: true }
     );
+=======
+  await axios.patch(
+    `${API_BASE}/api/trips/${id}`,
+    {
+      title: next.name,
+      destination: next.destinations?.[0] ?? "",
+      destinations: next.destinations ?? [],
+      startDate: next.startDate,
+      endDate: next.endDate,
+    },
+    { withCredentials: true }
+  );
+>>>>>>> 7d00daa (Add Google Places attraction reviews and display them in Trip Overview)
 
     // NOTE: your backend currently merges itineraryPatch directly, not nested under "itinerary".
     await axios.patch(

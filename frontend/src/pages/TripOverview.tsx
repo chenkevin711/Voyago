@@ -10,17 +10,15 @@ import { deletePlannedTrip, formatDateRange, getPlannedTripById, type PlannedTri
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
 function toCurrency(amount: number): string {
-  return `$${amount.toLocaleString()}`;
+  return `$${Number(amount || 0).toLocaleString()}`;
 }
+
 function getBudgetNumber(t: any): number {
   const b = t?.budget;
 
-  // old shape (number)
   if (typeof b === "number") return b;
 
-  // new shape (Budget object)
   if (b && typeof b === "object") {
-    // prefer computed planned total if present
     if (typeof b?.computed?.plannedTotal === "number") return b.computed.plannedTotal;
     if (typeof b?.totalBudget === "number") return b.totalBudget;
     if (typeof b?.dailyBudget === "number" && typeof b?.computed?.tripDays === "number") {
@@ -30,18 +28,33 @@ function getBudgetNumber(t: any): number {
 
   return 0;
 }
+
 function mapApiTripToPlannedTrip(t: any): PlannedTrip {
+  const itinerary = t.itinerary ?? {};
+
   return {
     id: t._id ?? t.id,
     name: t.title ?? t.name ?? "Untitled Trip",
     startDate: t.startDate,
     endDate: t.endDate,
     budget: getBudgetNumber(t),
-    estimatedTotal: Number(t.estimatedTotal ?? 0),
     destinations: Array.isArray(t.destinations)
       ? t.destinations
-      : (t.destination ? [t.destination] : []),
-  } as PlannedTrip;
+      : t.destination
+      ? [t.destination]
+      : [],
+    flights: itinerary.flights ?? [],
+    selectedFlight: itinerary.selectedFlight ?? undefined,
+    transportationNotes: itinerary.transportationNotes ?? "",
+    navigationPlans: itinerary.navigationPlans ?? [],
+    accommodations: itinerary.accommodations ?? [],
+    selectedAccommodation: itinerary.selectedAccommodation ?? undefined,
+    attractions: itinerary.attractions ?? [],
+    selectedAttractions: itinerary.selectedAttractions ?? [],
+    estimatedTotal: Number(itinerary.estimatedTotal ?? t.estimatedTotal ?? 0),
+    members: Number(itinerary.members ?? 1),
+    createdAt: t.createdAt ?? new Date().toISOString(),
+  };
 }
 
 export default function TripOverview() {
@@ -52,7 +65,6 @@ export default function TripOverview() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // tracks where this trip came from
   const [isMongoTrip, setIsMongoTrip] = useState(false);
 
   const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
@@ -73,7 +85,6 @@ export default function TripOverview() {
       setLoading(true);
       setLoadError(null);
 
-      // 1) Try backend first
       try {
         const res = await axios.get(`${API_BASE}/api/trips/${tripId}`, {
           withCredentials: true,
@@ -89,7 +100,6 @@ export default function TripOverview() {
         // ignore and fall back
       }
 
-      // 2) Fall back to local planned trip storage
       try {
         const found = await getPlannedTripById(tripId);
         if (cancelled) return;
@@ -205,6 +215,67 @@ export default function TripOverview() {
                     </Map>
                   </Box>
                 </APIProvider>
+              )}
+            </Paper>
+
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
+              <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Selected Attractions</Typography>
+
+              {trip.selectedAttractions && trip.selectedAttractions.length > 0 ? (
+                <Stack spacing={2}>
+                  {trip.selectedAttractions.map((item) => (
+                    <Paper
+                      key={`${item.name}-${item.location ?? "unknown"}`}
+                      elevation={0}
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        border: "1px solid rgba(47,65,86,0.15)"
+                      }}
+                    >
+                      <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
+
+                      {item.location && (
+                        <Typography color="text.secondary">{item.location}</Typography>
+                      )}
+
+                      <Typography sx={{ mt: 0.5 }}>
+                        {toCurrency(item.price)} {item.source ? `(${item.source})` : ""}
+                      </Typography>
+
+                      {item.rating != null && (
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                          Rating: {item.rating.toFixed(1)} / 5
+                        </Typography>
+                      )}
+
+                      {item.reviews && item.reviews.length > 0 && (
+                        <Stack spacing={1} sx={{ mt: 1.5 }}>
+                          {item.reviews.slice(0, 2).map((review, idx) => (
+                            <Paper
+                              key={`${item.name}-review-${idx}`}
+                              elevation={0}
+                              sx={{
+                                p: 1.5,
+                                borderRadius: 2,
+                                bgcolor: "rgba(47,65,86,0.04)"
+                              }}
+                            >
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                {review.authorName} • {review.rating}/5
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {review.text || "No review text available."}
+                              </Typography>
+                            </Paper>
+                          ))}
+                        </Stack>
+                      )}
+                    </Paper>
+                  ))}
+                </Stack>
+              ) : (
+                <Alert severity="info">No attractions selected for this trip yet.</Alert>
               )}
             </Paper>
 

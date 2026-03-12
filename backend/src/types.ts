@@ -117,10 +117,21 @@ export type Budget = {
 
 // ===== Itinerary Types =====
 
+export type AttractionReview = {
+  authorName: string;
+  rating: number;
+  text: string;
+  publishTime?: string;
+};
+
 export type ItineraryAttraction = {
   name: string;
   price: number;
   location?: string;
+  source?: "google_places" | "mock";
+  placeId?: string;
+  rating?: number;
+  reviews?: AttractionReview[];
 };
 
 export type ItineraryEventType =
@@ -168,6 +179,15 @@ export type ItineraryDay = {
 
 export type Itinerary = {
   selectedAttractions: ItineraryAttraction[];
+  attractions?: ItineraryAttraction[];
+  flights?: any[];
+  selectedFlight?: any;
+  transportationNotes?: string;
+  navigationPlans?: any[];
+  accommodations?: any[];
+  selectedAccommodation?: any;
+  estimatedTotal?: number;
+  members?: number;
   events?: ItineraryEvent[];
   days?: ItineraryDay[];
   updatedAt: string;
