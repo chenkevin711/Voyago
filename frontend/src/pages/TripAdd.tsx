@@ -48,7 +48,7 @@ const stepTitles = [
   "Transportation",
   "Living Accommodations",
   "Attractions",
-];
+]
 
 const fakeStays: StayOption[] = [
   { name: "Harbor Light Suites", location: "City Center", nightlyRate: 180 },
@@ -57,9 +57,19 @@ const fakeStays: StayOption[] = [
 ]
 
 type TransportationMode = "flight" | "train" | "road"
-
 type TripType = "domestic" | "international"
 type TravelStyle = "budget" | "mid" | "luxury"
+
+type GooglePlaceReview = {
+  authorAttribution?: {
+    displayName?: string
+  }
+  rating?: number
+  text?: {
+    text?: string
+  }
+  publishTime?: string
+}
 
 type ResolvedPlace = {
   name: string
@@ -173,7 +183,6 @@ function suggestStarterBudget(params: { nights: number; tripType: TripType; styl
   const nights = Math.max(1, params.nights)
   const days = nights + 1
 
-  // Per-day rates by style (excluding flight)
   const styleRates: Record<TravelStyle, { stayPerNight: number; foodPerDay: number; activitiesPerDay: number; localTransitPerDay: number }> = {
     budget: { stayPerNight: 120, foodPerDay: 55, activitiesPerDay: 25, localTransitPerDay: 15 },
     mid: { stayPerNight: 185, foodPerDay: 85, activitiesPerDay: 45, localTransitPerDay: 25 },
@@ -181,7 +190,7 @@ function suggestStarterBudget(params: { nights: number; tripType: TripType; styl
   }
 
   const baseFlight = params.tripType === "international" ? 1100 : 450
-  const flightBuffer = params.tripType === "international" ? 1.15 : 1.05 // intl flights fluctuate more
+  const flightBuffer = params.tripType === "international" ? 1.15 : 1.05
   const rates = styleRates[params.style]
 
   const stay = rates.stayPerNight * nights
@@ -190,8 +199,6 @@ function suggestStarterBudget(params: { nights: number; tripType: TripType; styl
   const localTransit = rates.localTransitPerDay * days
 
   const base = (baseFlight * flightBuffer) + stay + food + activities + localTransit
-
-  // Buffer for unknowns: intl tends to need more
   const bufferPct = params.tripType === "international" ? 0.22 : 0.15
   const raw = base * (1 + bufferPct)
 
@@ -241,6 +248,39 @@ async function resolvePlaceText(params: {
     placeId: p?.id,
     formattedAddress: p?.formattedAddress,
     location: { lat, lng }
+  }
+}
+
+async function fetchPlaceReviews(params: {
+  apiKey: string
+  placeId: string
+}): Promise<Pick<AttractionOption, "rating" | "reviews">> {
+  const res = await fetch(`https://places.googleapis.com/v1/places/${params.placeId}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": params.apiKey,
+      "X-Goog-FieldMask": "rating,reviews"
+    }
+  })
+
+  if (!res.ok) {
+    return { rating: undefined, reviews: [] }
+  }
+
+  const data = (await res.json()) as {
+    rating?: number
+    reviews?: GooglePlaceReview[]
+  }
+
+  return {
+    rating: data.rating,
+    reviews: (data.reviews ?? []).map((review) => ({
+      authorName: review.authorAttribution?.displayName ?? "Anonymous",
+      rating: review.rating ?? 0,
+      text: review.text?.text ?? "",
+      publishTime: review.publishTime
+    }))
   }
 }
 
@@ -400,8 +440,6 @@ function TripRouteMap(props: {
     return { lat: 46.5, lng: 8.4 }
   }, [props.places])
 
-  
-
   return (
     <Box
       sx={{
@@ -480,148 +518,138 @@ function startOfToday() {
 }
 
 export default function TripAdd() {
-  const navigate = useNavigate();
+  const navigate = useNavigate()
 
-  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
-  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
-  const serpApiKey = import.meta.env.VITE_SERPAPI_KEY as string | undefined;
+  const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined
+  const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined
+  const serpApiKey = import.meta.env.VITE_SERPAPI_KEY as string | undefined
 
-  const [activeStep, setActiveStep] = useState(0);
-  const [tripName, setTripName] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [budgetInput, setBudgetInput] = useState("");
-  const [destinationInput, setDestinationInput] = useState("");
-  const [destinations, setDestinations] = useState<string[]>([]);
-  const [transportMode, setTransportMode] = useState<TransportationMode>("flight");
-  const [transportationNotes, setTransportationNotes] = useState("");
+  const [activeStep, setActiveStep] = useState(0)
+  const [tripName, setTripName] = useState("")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
+  const [budgetInput, setBudgetInput] = useState("")
+  const [destinationInput, setDestinationInput] = useState("")
+  const [destinations, setDestinations] = useState<string[]>([])
+  const [transportMode, setTransportMode] = useState<TransportationMode>("flight")
+  const [transportationNotes, setTransportationNotes] = useState("")
 
-  // budget suggestion controls
-  const [tripType, setTripType] = useState<TripType>("domestic");
-  const [travelStyle, setTravelStyle] = useState<TravelStyle>("mid");
-  const [budgetTouched, setBudgetTouched] = useState(false);
+  const [tripType, setTripType] = useState<TripType>("domestic")
+  const [travelStyle, setTravelStyle] = useState<TravelStyle>("mid")
+  const [budgetTouched, setBudgetTouched] = useState(false)
 
-  const [flights, setFlights] = useState<FlightOption[]>([]);
-  const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined);
-  const [flightLoading, setFlightLoading] = useState(false);
+  const [flights, setFlights] = useState<FlightOption[]>([])
+  const [selectedFlight, setSelectedFlight] = useState<FlightOption | undefined>(undefined)
+  const [flightLoading, setFlightLoading] = useState(false)
 
-  const [accommodations] = useState<StayOption[]>(fakeStays);
-  const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined);
+  const [accommodations] = useState<StayOption[]>(fakeStays)
+  const [selectedAccommodation, setSelectedAccommodation] = useState<StayOption | undefined>(undefined)
 
-  const [attractions, setAttractions] = useState<AttractionOption[]>([]);
-  const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([]);
-  const [attractionsLoading, setAttractionsLoading] = useState(false);
+  const [attractions, setAttractions] = useState<AttractionOption[]>([])
+  const [selectedAttractions, setSelectedAttractions] = useState<AttractionOption[]>([])
+  const [attractionsLoading, setAttractionsLoading] = useState(false)
 
-  const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([]);
-  const [navigationLoading, setNavigationLoading] = useState(false);
-  const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({});
+  const [navigationPlans, setNavigationPlans] = useState<NavigationPlan[]>([])
+  const [navigationLoading, setNavigationLoading] = useState(false)
+  const [routeOptionsByLeg, setRouteOptionsByLeg] = useState<Record<number, RouteOption[]>>({})
 
-  const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([]);
-  const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([]);
-  const [routesLoading, setRoutesLoading] = useState(false);
-  const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({});
-  const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([]);
+  const [resolvedPlaces, setResolvedPlaces] = useState<ResolvedPlace[]>([])
+  const [routesByLeg, setRoutesByLeg] = useState<LegRoutes[]>([])
+  const [routesLoading, setRoutesLoading] = useState(false)
+  const [selectedRouteByLeg, setSelectedRouteByLeg] = useState<Record<number, number>>({})
+  const [attractionPlaces, setAttractionPlaces] = useState<ResolvedPlace[]>([])
 
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const dateError = useMemo(() => {
-    if (!startDate || !endDate) return null;
-    if (!isValidISODate(startDate) || !isValidISODate(endDate)) return "Please enter valid dates.";
-    const s = new Date(startDate);
-    const e = new Date(endDate);
-    if (e < s) return "End date must be on or after the start date.";
-    if (s < startOfToday()) return "Start date cannot be in the past.";
-    return null;
-  }, [startDate, endDate]);
+    if (!startDate || !endDate) return null
+    if (!isValidISODate(startDate) || !isValidISODate(endDate)) return "Please enter valid dates."
+    const s = new Date(startDate)
+    const e = new Date(endDate)
+    if (e < s) return "End date must be on or after the start date."
+    if (s < startOfToday()) return "Start date cannot be in the past."
+    return null
+  }, [startDate, endDate])
 
-  const nights = tripNights(startDate, endDate);
-  const budget = Number(budgetInput);
+  const nights = tripNights(startDate, endDate)
+  const budget = Number(budgetInput)
 
-  const flightCost = selectedFlight?.price ?? 0;
-  const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0;
-  const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0);
-  const estimatedTotal = flightCost + stayCost + attractionCost;
+  const flightCost = selectedFlight?.price ?? 0
+  const stayCost = selectedAccommodation ? selectedAccommodation.nightlyRate * nights : 0
+  const attractionCost = selectedAttractions.reduce((sum, a) => sum + a.price, 0)
+  const estimatedTotal = flightCost + stayCost + attractionCost
 
-  const budgetDifference = budget - estimatedTotal;
-  const overBudget = budgetDifference < 0;
+  const budgetDifference = budget - estimatedTotal
+  const overBudget = budgetDifference < 0
 
-  const tripDates = formatDateRange(startDate, endDate);
+  const tripDates = formatDateRange(startDate, endDate)
 
   function getCountryFromFormattedAddress(addr?: string): string | null {
-    if (!addr) return null;
-    const parts = addr.split(",").map((s) => s.trim()).filter(Boolean);
-    return parts.length ? parts[parts.length - 1] : null;
+    if (!addr) return null
+    const parts = addr.split(",").map((s) => s.trim()).filter(Boolean)
+    return parts.length ? parts[parts.length - 1] : null
   }
 
-  // ✅ infer country + international based on resolvedPlaces (TOP LEVEL, not inside useEffect)
   const inferredCountry = useMemo(() => {
-    const first = resolvedPlaces[0];
-    return getCountryFromFormattedAddress(first?.formattedAddress);
-  }, [resolvedPlaces]);
+    const first = resolvedPlaces[0]
+    return getCountryFromFormattedAddress(first?.formattedAddress)
+  }, [resolvedPlaces])
 
   const isInternational = useMemo(() => {
-    if (!inferredCountry) return false;
-    return inferredCountry.toLowerCase() !== "united states";
-  }, [inferredCountry]);
+    if (!inferredCountry) return false
+    return inferredCountry.toLowerCase() !== "united states"
+  }, [inferredCountry])
 
-  // ✅ when destination resolves, auto-set tripType (domestic/international) once
   useEffect(() => {
-    if (!inferredCountry) return;
-    setTripType(isInternational ? "international" : "domestic");
-  }, [inferredCountry, isInternational]);
+    if (!inferredCountry) return
+    setTripType(isInternational ? "international" : "domestic")
+  }, [inferredCountry, isInternational])
 
-  // Suggested starter budget (Step 2 = budget step now)
   const starterSuggestion = useMemo(() => {
-    // only compute when dates are valid AND at least 1 destination exists
-    if (!startDate || !endDate || !!dateError) return null;
-    if (destinations.length === 0) return null;
+    if (!startDate || !endDate || !!dateError) return null
+    if (destinations.length === 0) return null
 
-    const s = suggestStarterBudget({
+    return suggestStarterBudget({
       nights,
-      tripType, // auto-set from inferredCountry when available
+      tripType,
       style: travelStyle,
-    });
+    })
+  }, [startDate, endDate, dateError, destinations.length, nights, tripType, travelStyle])
 
-    return s;
-  }, [startDate, endDate, dateError, destinations.length, nights, tripType, travelStyle]);
-
-  // Prefill budget once (if user hasn't edited)
   useEffect(() => {
-    if (!starterSuggestion) return;
-    if (budgetTouched) return;
-    if (budgetInput.trim().length > 0) return;
-    setBudgetInput(String(starterSuggestion.suggested));
-  }, [starterSuggestion, budgetTouched, budgetInput]);
+    if (!starterSuggestion) return
+    if (budgetTouched) return
+    if (budgetInput.trim().length > 0) return
+    setBudgetInput(String(starterSuggestion.suggested))
+  }, [starterSuggestion, budgetTouched, budgetInput])
 
-  // ✅ Step 1 destinations, Step 2 budget
   const canContinue = useMemo(() => {
-    if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate) && !dateError;
-    if (activeStep === 1) return destinations.length > 0; // Destinations
-    if (activeStep === 2) return budgetInput.trim().length > 0 && budget > 0; // Budget
-    return true;
-  }, [activeStep, tripName, startDate, endDate, dateError, destinations.length, budgetInput, budget]);
+    if (activeStep === 0) return tripName.trim().length > 1 && Boolean(startDate) && Boolean(endDate) && !dateError
+    if (activeStep === 1) return destinations.length > 0
+    if (activeStep === 2) return budgetInput.trim().length > 0 && budget > 0
+    return true
+  }, [activeStep, tripName, startDate, endDate, dateError, destinations.length, budgetInput, budget])
 
-  // ✅ Places resolving stays the same, but removed invalid hooks from inside it
   useEffect(() => {
     if (!mapsApiKey || destinations.length === 0) {
-      setResolvedPlaces([]);
-      return;
+      setResolvedPlaces([])
+      return
     }
 
-    let cancelled = false;
-    (async () => {
+    let cancelled = false
+    ;(async () => {
       const results = await Promise.all(
         destinations.map((d) => resolvePlaceText({ apiKey: mapsApiKey, query: d }))
-      );
-      if (cancelled) return;
-      setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])));
-    })();
+      )
+      if (cancelled) return
+      setResolvedPlaces(results.flatMap((item) => (item ? [item] : [])))
+    })()
 
     return () => {
-      cancelled = true;
-    };
-  }, [destinations, mapsApiKey]);
+      cancelled = true
+    }
+  }, [destinations, mapsApiKey])
 
   useEffect(() => {
     if (Object.keys(routeOptionsByLeg).length === 0) return
@@ -782,10 +810,10 @@ export default function TripAdd() {
               destination: destination.name,
               routes: primaryRoute.encodedPolyline
                 ? [{
-                  distanceMeters: primaryRoute.distanceMeters,
-                  duration: primaryRoute.duration,
-                  encodedPolyline: primaryRoute.encodedPolyline
-                }]
+                    distanceMeters: primaryRoute.distanceMeters,
+                    duration: primaryRoute.duration,
+                    encodedPolyline: primaryRoute.encodedPolyline
+                  }]
                 : []
             },
             options
@@ -886,7 +914,7 @@ export default function TripAdd() {
         headers: {
           "Content-Type": "application/json",
           "X-Goog-Api-Key": mapsApiKey,
-          "X-Goog-FieldMask": "places.displayName,places.formattedAddress"
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress"
         },
         body: JSON.stringify({
           textQuery: `Top attractions in ${destinations[0]}`,
@@ -895,23 +923,52 @@ export default function TripAdd() {
       })
 
       const data = (await response.json()) as {
-        places?: Array<{ displayName?: { text?: string }; formattedAddress?: string }>
+        places?: Array<{
+          id?: string
+          displayName?: { text?: string }
+          formattedAddress?: string
+        }>
       }
 
-      const options = (data.places ?? []).map((place, index) => ({
+      const options: AttractionOption[] = (data.places ?? []).map((place, index) => ({
         name: place.displayName?.text ?? `Attraction ${index + 1}`,
         location: place.formattedAddress ?? destinations[0],
         price: 20 + index * 12,
-        source: "google_places" as const
+        source: "google_places",
+        placeId: place.id
       }))
 
-      const nextAttractions = options.length > 0
+      const nextAttractions: AttractionOption[] = options.length > 0
         ? options
-        : [{ name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" as const }]
-      setAttractions(nextAttractions)
+        : [{ name: "Historic Landmarks Tour", location: destinations[0], price: 45, source: "mock" }]
+
+      const withReviews = await Promise.all(
+        nextAttractions.map(async (item) => {
+          if (!mapsApiKey || item.source !== "google_places" || !item.placeId) {
+            return item
+          }
+
+          try {
+            const details = await fetchPlaceReviews({
+              apiKey: mapsApiKey,
+              placeId: item.placeId
+            })
+
+            return {
+              ...item,
+              rating: details.rating,
+              reviews: details.reviews
+            }
+          } catch {
+            return item
+          }
+        })
+      )
+
+      setAttractions(withReviews)
 
       const placeResults = await Promise.all(
-        nextAttractions.map((item) => resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` }))
+        withReviews.map((item) => resolvePlaceText({ apiKey: mapsApiKey, query: `${item.name} ${item.location}` }))
       )
       setAttractionPlaces(placeResults.flatMap((p) => (p ? [p] : [])))
     } catch {
@@ -993,154 +1050,151 @@ export default function TripAdd() {
           <Paper elevation={0} sx={{ p: 3, borderRadius: 3 }}>
             {activeStep === 0 && (
               <Stack spacing={2}>
-  <TextField
-    label="Trip name"
-    value={tripName}
-    onChange={(e) => setTripName(e.target.value)}
-    fullWidth
-  />
+                <TextField
+                  label="Trip name"
+                  value={tripName}
+                  onChange={(e) => setTripName(e.target.value)}
+                  fullWidth
+                />
 
-  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-    <TextField
-      label="Start date"
-      type="date"
-      InputLabelProps={{ shrink: true }}
-      value={startDate}
-      onChange={(e) => setStartDate(e.target.value)}
-      error={!!dateError}
-      fullWidth
-    />
-    <TextField
-      label="End date"
-      type="date"
-      InputLabelProps={{ shrink: true }}
-      value={endDate}
-      onChange={(e) => setEndDate(e.target.value)}
-      error={!!dateError}
-      helperText={dateError ?? " "}
-      fullWidth
-    />
-  </Stack>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                  <TextField
+                    label="Start date"
+                    type="date"
+                    InputLabelProps={{ shrink: true }}
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    error={!!dateError}
+                    fullWidth
+                  />
+                  <TextField
+                    label="End date"
+                    type="date"
+                    InputLabelProps={{ shrink: true }}
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    error={!!dateError}
+                    helperText={dateError ?? " "}
+                    fullWidth
+                  />
+                </Stack>
 
-  <Typography color="text.secondary">Trip window: {tripDates}</Typography>
-</Stack>
-)}
+                <Typography color="text.secondary">Trip window: {tripDates}</Typography>
+              </Stack>
+            )}
 
-{activeStep === 2 && (
-<Stack spacing={2}>
-  <Paper
-    elevation={0}
-    sx={{
-      p: 2,
-      borderRadius: 3,
-      border: "1px solid rgba(47,65,86,0.12)"
-    }}
-  >
-    <Stack spacing={1.5}>
-      {/* header row */}
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        spacing={1.5}
-        alignItems={{ xs: "flex-start", sm: "center" }}
-        justifyContent="space-between"
-      >
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-          <Typography sx={{ fontWeight: 800 }}>Starter budget</Typography>
+            {activeStep === 2 && (
+              <Stack spacing={2}>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2,
+                    borderRadius: 3,
+                    border: "1px solid rgba(47,65,86,0.12)"
+                  }}
+                >
+                  <Stack spacing={1.5}>
+                    <Stack
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1.5}
+                      alignItems={{ xs: "flex-start", sm: "center" }}
+                      justifyContent="space-between"
+                    >
+                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                        <Typography sx={{ fontWeight: 800 }}>Starter budget</Typography>
 
-          {destinations.length > 0 && (
-            <Chip
-              size="small"
-              label={isInternational ? "International trip" : "Domestic trip"}
-              variant="outlined"
-              sx={{ borderRadius: 999, fontWeight: 700 }}
-            />
-          )}
-        </Stack>
+                        {destinations.length > 0 && (
+                          <Chip
+                            size="small"
+                            label={isInternational ? "International trip" : "Domestic trip"}
+                            variant="outlined"
+                            sx={{ borderRadius: 999, fontWeight: 700 }}
+                          />
+                        )}
+                      </Stack>
 
-        {/* travel style segmented */}
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
-            Travel style
-          </Typography>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                          Travel style
+                        </Typography>
 
-          <ToggleButtonGroup
-            exclusive
-            value={travelStyle}
-            onChange={(_, v) => v && setTravelStyle(v)}
-            size="small"
-            sx={{
-              bgcolor: "action.hover",
-              p: 0.5,
-              borderRadius: 999,
-              "& .MuiToggleButton-root": {
-                border: 0,
-                borderRadius: 999,
-                px: 2,
-                textTransform: "none",
-                fontWeight: 800
-              }
-            }}
-          >
-            <ToggleButton value="budget">Budget</ToggleButton>
-            <ToggleButton value="mid">Mid</ToggleButton>
-            <ToggleButton value="luxury">Luxury</ToggleButton>
-          </ToggleButtonGroup>
-        </Stack>
-      </Stack>
+                        <ToggleButtonGroup
+                          exclusive
+                          value={travelStyle}
+                          onChange={(_, v) => v && setTravelStyle(v)}
+                          size="small"
+                          sx={{
+                            bgcolor: "action.hover",
+                            p: 0.5,
+                            borderRadius: 999,
+                            "& .MuiToggleButton-root": {
+                              border: 0,
+                              borderRadius: 999,
+                              px: 2,
+                              textTransform: "none",
+                              fontWeight: 800
+                            }
+                          }}
+                        >
+                          <ToggleButton value="budget">Budget</ToggleButton>
+                          <ToggleButton value="mid">Mid</ToggleButton>
+                          <ToggleButton value="luxury">Luxury</ToggleButton>
+                        </ToggleButtonGroup>
+                      </Stack>
+                    </Stack>
 
-      {/* suggestion box */}
-      {!starterSuggestion ? (
-        <Alert severity="info" sx={{ mb: 0 }}>
-          Add dates in Step 1 and at least one destination to get a suggested budget.
-        </Alert>
-      ) : (
-        <Alert severity="info" sx={{ mb: 0 }}>
-          Suggested budget: <b>{toCurrency(starterSuggestion.suggested)}</b>{" "}
-          <span style={{ opacity: 0.85 }}>
-            (includes ~{Math.round(starterSuggestion.bufferPct * 100)}% buffer)
-          </span>
-          <br />
-          <span style={{ opacity: 0.85 }}>
-            Based on {nights} night{nights === 1 ? "" : "s"} and your travel style.
-          </span>
-        </Alert>
-      )}
-    </Stack>
-  </Paper>
+                    {!starterSuggestion ? (
+                      <Alert severity="info" sx={{ mb: 0 }}>
+                        Add dates in Step 1 and at least one destination to get a suggested budget.
+                      </Alert>
+                    ) : (
+                      <Alert severity="info" sx={{ mb: 0 }}>
+                        Suggested budget: <b>{toCurrency(starterSuggestion.suggested)}</b>{" "}
+                        <span style={{ opacity: 0.85 }}>
+                          (includes ~{Math.round(starterSuggestion.bufferPct * 100)}% buffer)
+                        </span>
+                        <br />
+                        <span style={{ opacity: 0.85 }}>
+                          Based on {nights} night{nights === 1 ? "" : "s"} and your travel style.
+                        </span>
+                      </Alert>
+                    )}
+                  </Stack>
+                </Paper>
 
-  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
-    <TextField
-      label="Total budget (USD)"
-      type="number"
-      value={budgetInput}
-      onChange={(e) => {
-        setBudgetTouched(true)
-        setBudgetInput(e.target.value)
-      }}
-      placeholder="Enter your total budget"
-      inputProps={{ min: 0, step: 50 }}
-      sx={{ maxWidth: 280 }}
-    />
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
+                  <TextField
+                    label="Total budget (USD)"
+                    type="number"
+                    value={budgetInput}
+                    onChange={(e) => {
+                      setBudgetTouched(true)
+                      setBudgetInput(e.target.value)
+                    }}
+                    placeholder="Enter your total budget"
+                    inputProps={{ min: 0, step: 50 }}
+                    sx={{ maxWidth: 280 }}
+                  />
 
-    <Button
-      variant="outlined"
-      onClick={() => {
-        if (!starterSuggestion) return
-        setBudgetTouched(true)
-        setBudgetInput(String(starterSuggestion.suggested))
-      }}
-      disabled={!starterSuggestion}
-      sx={{ height: 40 }}
-    >
-      Use suggested
-    </Button>
-  </Stack>
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      if (!starterSuggestion) return
+                      setBudgetTouched(true)
+                      setBudgetInput(String(starterSuggestion.suggested))
+                    }}
+                    disabled={!starterSuggestion}
+                    sx={{ height: 40 }}
+                  >
+                    Use suggested
+                  </Button>
+                </Stack>
 
-  <Typography variant="body2" color="text.secondary">
-    This is a starting target. We’ll show warning-only guidance as you pick flights, stays, and attractions.
-  </Typography>
-</Stack>
-)}
+                <Typography variant="body2" color="text.secondary">
+                  This is a starting target. We’ll show warning-only guidance as you pick flights, stays, and attractions.
+                </Typography>
+              </Stack>
+            )}
 
             {activeStep === 1 && (
               <Stack spacing={2}>
@@ -1184,9 +1238,6 @@ export default function TripAdd() {
                 )}
               </Stack>
             )}
-
-            {/* Steps 3-5 unchanged from your file (transportation / accommodations / attractions)... */}
-            {/* KEEP your existing code below exactly as-is (I didn’t remove anything). */}
 
             {activeStep === 3 && (
               <Stack spacing={2}>
@@ -1414,6 +1465,35 @@ export default function TripAdd() {
                       <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
                       <Typography color="text.secondary">{item.location}</Typography>
                       <Typography>{toCurrency(item.price)} ({item.source})</Typography>
+
+                      {item.rating != null && (
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                          Rating: {item.rating.toFixed(1)} / 5
+                        </Typography>
+                      )}
+
+                      {item.reviews && item.reviews.length > 0 && (
+                        <Stack spacing={1} sx={{ mt: 1.5 }}>
+                          {item.reviews.slice(0, 2).map((review, idx) => (
+                            <Paper
+                              key={`${item.name}-review-${idx}`}
+                              elevation={0}
+                              sx={{
+                                p: 1.5,
+                                borderRadius: 2,
+                                bgcolor: "rgba(47,65,86,0.04)"
+                              }}
+                            >
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                {review.authorName} • {review.rating}/5
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {review.text || "No review text available."}
+                              </Typography>
+                            </Paper>
+                          ))}
+                        </Stack>
+                      )}
                     </Paper>
                   )
                 })}
