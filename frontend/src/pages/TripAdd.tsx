@@ -305,7 +305,6 @@ export default function TripAdd() {
             const selectedByLeg: Record<string, FlightOption> = {}
             const collectedAirports: ResolvedAirport[] = []
             let firstOriginAirport: ResolvedAirport | null = null
-            let firstDestinationAirport: ResolvedAirport | null = null
             let cursorDate = startDate
 
             for (let idx = 0; idx < destinationStops.length; idx += 1) {
@@ -326,7 +325,6 @@ export default function TripAdd() {
 
                     if (idx === 0) {
                         firstOriginAirport = result.origin
-                        firstDestinationAirport = result.destination
                     }
 
                     collectedAirports.push(result.origin, result.destination)
