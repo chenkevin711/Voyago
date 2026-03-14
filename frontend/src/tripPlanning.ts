@@ -70,13 +70,14 @@ export type PlannedTrip = {
   flights: FlightOption[];
   selectedFlight?: FlightOption;
 
+  transportMode?: "flight" | "train" | "road";
   transportationNotes: string;
   navigationPlans: NavigationPlan[];
 
-  accommodations: StayOption[];
+  accommodations?: StayOption[];
   selectedAccommodation?: StayOption;
 
-  attractions: AttractionOption[];
+  attractions?: AttractionOption[];
   selectedAttractions: AttractionOption[];
 
   estimatedTotal: number;

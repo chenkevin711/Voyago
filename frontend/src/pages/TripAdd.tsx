@@ -60,7 +60,7 @@ import {
 } from "./tripAddUtils.ts"
 import { AirportPinsMap, TripRouteMap } from "./TripAddMaps.tsx"
 import { DestinationsStepSection, FlightLegOptionsSection } from "./TripAddSections.tsx"
-
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001"
 const stepTitles = [
     "Name + Dates",
     "Destinations",
@@ -276,6 +276,13 @@ const starterSuggestion = useMemo(() => {
 }, [startDate, endDate, datesValid, destinations.length, nights, tripType, travelStyle])
     const selectedFlightsTotal = Object.values(selectedFlightsByLeg).reduce((sum, flight) => sum + (flight.price ?? 0), 0)
     const flightCost = selectedFlightsTotal > 0 ? selectedFlightsTotal : (selectedFlight?.price ?? 0)
+    const navigationCost = navigationPlans.reduce(
+    (sum, plan) => sum + (plan.estimatedCost ?? 0),
+    0)
+    const transportationCost =
+    transportMode === "flight"
+        ? (selectedFlightsTotal > 0 ? selectedFlightsTotal : (selectedFlight?.price ?? 0))
+        : navigationCost
     const stayCost = Object.values(selectedAccommodationByDest).reduce(
         (sum, stay) => sum + stay.nightlyRate * nights,
         0
@@ -283,7 +290,7 @@ const starterSuggestion = useMemo(() => {
     const attractionCost = Object.values(selectedAttractionsByDest)
         .flat()
         .reduce((sum, a) => sum + a.price, 0)
-    const estimatedTotal = flightCost + stayCost + attractionCost
+    const estimatedTotal = transportationCost + stayCost + attractionCost
     const budgetDifference = budget - estimatedTotal
     const overBudget = budgetDifference < 0
 
@@ -677,8 +684,8 @@ useEffect(() => {
 
         try {
             const response = await fetch(
-                `/api/accommodations?destination=${encodeURIComponent(destination)}&pageSize=5`
-            )
+  `${API_BASE}/api/accommodations?destination=${encodeURIComponent(destination)}&pageSize=5`
+)
 
             if (!response.ok) {
                 const err = (await response.json()) as { error?: string }
@@ -867,11 +874,17 @@ useEffect(() => {
                 flights,
                 selectedFlight,
                 transportationNotes,
+                transportMode,
                 navigationPlans,
-                accommodations: Object.values(accommodationsByDest).flat(),
                 selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
-                attractions: Object.values(attractionsByDest).flat(),
-                selectedAttractions: Object.values(selectedAttractionsByDest).flat(),
+                selectedAttractions: Object.values(selectedAttractionsByDest)
+                  .flat()
+                  .map((a) => ({
+                    name: a.name,
+                    location: a.location,
+                    price: a.price,
+                    source: a.source
+                  })),
                 estimatedTotal,
                 members: 1,
                 createdAt: new Date().toISOString()
@@ -1080,94 +1093,276 @@ useEffect(() => {
                         )}
 
                         {activeStep === 3 && (
-                            <Stack spacing={2}>
-                                <TextField
-                                    select
-                                    label="Transportation mode"
-                                    value={transportMode}
-                                    onChange={(e) => setTransportMode(e.target.value as TransportationMode)}
-                                >
-                                    <MenuItem value="flight">Flight</MenuItem>
-                                    <MenuItem value="train">Train (transit routes)</MenuItem>
-                                    <MenuItem value="road">Road trip / car</MenuItem>
-                                </TextField>
+    <Stack spacing={2}>
+        <TextField
+            select
+            label="Transportation mode"
+            value={transportMode}
+            onChange={(e) => setTransportMode(e.target.value as TransportationMode)}
+        >
+            <MenuItem value="flight">Flight</MenuItem>
+            <MenuItem value="train">Train (transit routes)</MenuItem>
+            <MenuItem value="road">Road trip / car</MenuItem>
+        </TextField>
 
-                                <TextField
-                                    label="Transportation notes"
-                                    value={transportationNotes}
-                                    onChange={(e) => setTransportationNotes(e.target.value)}
-                                    placeholder="e.g. Prefer morning departures"
-                                />
+        <TextField
+            label="Transportation notes"
+            value={transportationNotes}
+            onChange={(e) => setTransportationNotes(e.target.value)}
+            placeholder="e.g. Prefer morning departures"
+        />
 
-                                {transportMode === "flight" && (
-                                    <>
-                                        <TextField
-                                            label="Origin (city or airport code)"
-                                            value={transportOriginInput}
-                                            onChange={(e) => setTransportOriginInput(e.target.value)}
-                                            placeholder="e.g. Philadelphia or PHL"
-                                        />
+        {/* ================= FLIGHTS ================= */}
 
-                                        <Stack direction="row" spacing={1}>
-                                            <Button variant="outlined" onClick={() => void resolveAirportInput("origin")}>
-                                                Resolve origin airport
-                                            </Button>
-                                            <Button variant="outlined" onClick={() => void resolveAirportInput("destination")}>
-                                                Resolve first destination airport
-                                            </Button>
-                                        </Stack>
+        {transportMode === "flight" && (
+            <>
+                <TextField
+                    label="Origin (city or airport code)"
+                    value={transportOriginInput}
+                    onChange={(e) => setTransportOriginInput(e.target.value)}
+                    placeholder="e.g. Philadelphia or PHL"
+                />
 
-                                        <Button
-                                            variant="outlined"
-                                            onClick={fetchFlights}
-                                            disabled={flightLoading || !datesValid || !transportOriginInput || destinationStops.length === 0}
-                                        >
-                                            {flightLoading ? "Loading flight options..." : "Get flight options for all destination legs"}
-                                        </Button>
+                <Stack direction="row" spacing={1}>
+                    <Button
+                        variant="outlined"
+                        onClick={() => void resolveAirportInput("origin")}
+                    >
+                        Resolve origin airport
+                    </Button>
 
-                                        {transportError && <Alert severity="error">{transportError}</Alert>}
+                    <Button
+                        variant="outlined"
+                        onClick={() => void resolveAirportInput("destination")}
+                    >
+                        Resolve first destination airport
+                    </Button>
+                </Stack>
 
-                                        {(originAirport || resolvedFlightAirports.length > 0) && (
-                                            <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
-                                                <Typography sx={{ fontWeight: 700, mb: 1 }}>Resolved Airports</Typography>
+                <Button
+                    variant="outlined"
+                    onClick={fetchFlights}
+                    disabled={
+                        flightLoading ||
+                        !datesValid ||
+                        !transportOriginInput ||
+                        destinationStops.length === 0
+                    }
+                >
+                    {flightLoading
+                        ? "Loading flight options..."
+                        : "Get flight options for all destination legs"}
+                </Button>
 
-                                                {originAirport && (
-                                                    <Typography variant="body2" sx={{ mb: 0.5 }}>
-                                                        Origin: {originAirport.airport.name} ({originAirport.airport.code})
-                                                    </Typography>
-                                                )}
+                {transportError && (
+                    <Alert severity="error">{transportError}</Alert>
+                )}
 
-                                                {resolvedFlightAirports
-                                                    .filter((airport) => airport.airport.code !== originAirport?.airport.code)
-                                                    .map((airport, idx) => (
-                                                        <Typography key={`${airport.airport.code}-${idx}`} variant="body2">
-                                                            Stop {idx + 1}: {airport.airport.name} ({airport.airport.code})
-                                                        </Typography>
-                                                    ))}
-                                            </Paper>
-                                        )}
+                {(originAirport || resolvedFlightAirports.length > 0) && (
+                    <Paper elevation={0} sx={{ p: 2, borderRadius: 2 }}>
+                        <Typography sx={{ fontWeight: 700, mb: 1 }}>
+                            Resolved Airports
+                        </Typography>
 
-                                        {mapsApiKey && resolvedFlightAirports.length > 0 && (
-                                            <APIProvider apiKey={mapsApiKey}>
-                                                <AirportPinsMap
-                                                    airports={resolvedFlightAirports}
-                                                    mapId={mapId}
-                                                />
-                                            </APIProvider>
-                                        )}
-
-                                        <FlightLegOptionsSection
-                                            legFlightPlans={legFlightPlans}
-                                            selectedFlightsByLeg={selectedFlightsByLeg}
-                                            onSelectFlight={(legId, flight) => {
-                                                setSelectedFlightsByLeg((prev) => ({ ...prev, [legId]: flight }))
-                                                setSelectedFlight(flight)
-                                            }}
-                                        />
-                                    </>
-                                )}
-                            </Stack>
+                        {originAirport && (
+                            <Typography variant="body2" sx={{ mb: 0.5 }}>
+                                Origin: {originAirport.airport.name} (
+                                {originAirport.airport.code})
+                            </Typography>
                         )}
+
+                        {resolvedFlightAirports
+                            .filter(
+                                (airport) =>
+                                    airport.airport.code !==
+                                    originAirport?.airport.code
+                            )
+                            .map((airport, idx) => (
+                                <Typography
+                                    key={`${airport.airport.code}-${idx}`}
+                                    variant="body2"
+                                >
+                                    Stop {idx + 1}: {airport.airport.name} (
+                                    {airport.airport.code})
+                                </Typography>
+                            ))}
+                    </Paper>
+                )}
+
+                {mapsApiKey && resolvedFlightAirports.length > 0 && (
+                    <APIProvider apiKey={mapsApiKey}>
+                        <AirportPinsMap
+                            airports={resolvedFlightAirports}
+                            mapId={mapId}
+                        />
+                    </APIProvider>
+                )}
+
+                <FlightLegOptionsSection
+                    legFlightPlans={legFlightPlans}
+                    selectedFlightsByLeg={selectedFlightsByLeg}
+                    onSelectFlight={(legId, flight) => {
+                        setSelectedFlightsByLeg((prev) => ({
+                            ...prev,
+                            [legId]: flight
+                        }))
+                        setSelectedFlight(flight)
+                    }}
+                />
+            </>
+        )}
+
+        {/* ================= TRAIN / ROAD ================= */}
+
+        {transportMode !== "flight" && (
+            <Stack spacing={2}>
+                <Button
+                    variant="outlined"
+                    onClick={() => void buildRoutes()}
+                    disabled={destinations.length < 2}
+                >
+                    Build{" "}
+                    {transportMode === "train"
+                        ? "train"
+                        : "road trip"}{" "}
+                    route options
+                </Button>
+
+                {destinations.length < 2 && (
+                    <Alert severity="info">
+                        Add at least two destinations to build{" "}
+                        {transportMode === "train"
+                            ? "train"
+                            : "driving"}{" "}
+                        routes.
+                    </Alert>
+                )}
+
+                {routesByLeg.length > 0 && mapsApiKey && (
+                    <APIProvider apiKey={mapsApiKey}>
+                        <TripRouteMap
+                            loading={false}
+                            places={resolvedPlaces}
+                            legs={routesByLeg}
+                            selectedRouteByLeg={selectedRouteByLeg}
+                            mapId={mapId}
+                        />
+                    </APIProvider>
+                )}
+
+                {routesByLeg.map((leg, legIndex) => {
+                    const allOptions = routeOptionsByLeg[legIndex] ?? []
+
+                 const options = allOptions.filter((option) => {
+                    if (transportMode === "train") return option.mode === "transit"
+                    if (transportMode === "road") return option.mode === "driving"
+                    return true
+                  })
+
+                    return (
+                        <Paper
+                            key={`${leg.origin}-${leg.destination}`}
+                            elevation={0}
+                            sx={{
+                                p: 2,
+                                borderRadius: 2,
+                                border: "1px solid rgba(47,65,86,0.12)"
+                            }}
+                        >
+                            <Typography sx={{ fontWeight: 700, mb: 1 }}>
+                                {leg.origin} → {leg.destination}
+                            </Typography>
+
+                            {options.length === 0 ? (
+                                <Typography
+                                    color="text.secondary"
+                                    variant="body2"
+                                >
+                                    No route options available yet.
+                                </Typography>
+                            ) : (
+                                <Stack spacing={1}>
+                                    {options.map((option, optionIdx) => {
+                                        const selected =
+                                            (selectedRouteByLeg[
+                                                legIndex
+                                            ] ?? 0) === optionIdx
+
+                                        return (
+                                            <Paper
+                                                key={`${legIndex}-${optionIdx}`}
+                                                elevation={0}
+                                                sx={{
+                                                    p: 1.5,
+                                                    borderRadius: 2,
+                                                    border: selected
+                                                        ? "2px solid"
+                                                        : "1px solid rgba(47,65,86,0.15)",
+                                                    borderColor: selected
+                                                        ? "primary.main"
+                                                        : "rgba(47,65,86,0.15)",
+                                                    cursor: "pointer"
+                                                }}
+                                                onClick={() =>
+                                                    setSelectedRouteByLeg(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            [legIndex]:
+                                                                optionIdx
+                                                        })
+                                                    )
+                                                }
+                                            >
+                                                <Stack
+                                                    direction="row"
+                                                    justifyContent="space-between"
+                                                    alignItems="center"
+                                                >
+                                                    <Box>
+                                                        <Typography
+                                                            sx={{
+                                                                fontWeight: 700
+                                                            }}
+                                                        >
+                                                            {option.label}
+                                                        </Typography>
+                                                        <Typography
+                                                            variant="body2"
+                                                            color="text.secondary"
+                                                        >
+                                                            {option.duration} •{" "}
+                                                            {toCurrency(
+                                                                option.estimatedCost
+                                                            )}
+                                                        </Typography>
+                                                    </Box>
+
+                                                    <Button
+                                                        href={option.mapsUrl}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        size="small"
+                                                        variant="text"
+                                                        onClick={(e) =>
+                                                            e.stopPropagation()
+                                                        }
+                                                    >
+                                                        Open in Maps
+                                                    </Button>
+                                                </Stack>
+                                            </Paper>
+                                        )
+                                    })}
+                                </Stack>
+                            )}
+                        </Paper>
+                    )
+                })}
+            </Stack>
+        )}
+    </Stack>
+)}
+        
 
                         {activeStep === 4 && (
                             <Stack spacing={2}>
