@@ -220,7 +220,7 @@ export default function Navbar() {
                             textDecoration: "none",
                         }}
                     >
-                        Wanderly
+                        Voyago
                     </Typography>
 
                     <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
