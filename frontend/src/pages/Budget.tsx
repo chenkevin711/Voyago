@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -105,7 +105,6 @@ export default function Budget() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const { emitTripUpdate, onTripUpdate } = useTripSocket(isMongoTrip ? tripId : undefined);
-  const skipEmitRef = useRef(false);
 
   const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
   const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
@@ -186,7 +185,6 @@ export default function Budget() {
   useEffect(() => {
     const unsub = onTripUpdate((payload) => {
       if (payload.section !== "budget") return;
-      skipEmitRef.current = true;
       const newBudget = typeof payload.data?.budget === "number"
         ? payload.data.budget
         : payload.data?.computed?.plannedTotal ?? 0;
@@ -258,10 +256,7 @@ export default function Budget() {
           { budget: parsedBudget },
           { withCredentials: true }
         );
-        if (!skipEmitRef.current) {
-          emitTripUpdate("budget", { budget: parsedBudget, ...res.data?.budget });
-        }
-        skipEmitRef.current = false;
+        emitTripUpdate("budget", { budget: parsedBudget, ...res.data?.budget });
       } else {
         const ok = updateLocalPlannedTripBudget(tripId, parsedBudget);
         if (!ok) throw new Error("Could not persist locally (plannedTrips not found).");

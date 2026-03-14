@@ -189,12 +189,35 @@ router.get("/", async (req: Request, res: Response) => {
       ? await col.find({ _id: { $in: sharedTripIds } }).sort({ createdAt: -1 }).toArray()
       : [];
 
-    // Combine with role info
+    // Count how many trip_access entries exist per trip (each entry = 1 collaborator beyond owner)
+    const allTrips = [...ownedTrips, ...sharedTrips];
+    const allTripIds = allTrips.map((t) => t._id!);
+
+    const accessCounts = allTripIds.length
+      ? await acol
+          .aggregate<{ _id: ObjectId; count: number }>([
+            { $match: { tripId: { $in: allTripIds } } },
+            { $group: { _id: "$tripId", count: { $sum: 1 } } },
+          ])
+          .toArray()
+      : [];
+
+    const countMap = new Map(accessCounts.map((c) => [c._id.toString(), c.count]));
+
+    // membersCount = 1 (owner) + number of explicit access entries for that trip
     const result = [
-      ...ownedTrips.map((t) => ({ ...t, userRole: "owner" as const })),
+      ...ownedTrips.map((t) => ({
+        ...t,
+        userRole: "owner" as const,
+        membersCount: 1 + (countMap.get(t._id!.toString()) ?? 0),
+      })),
       ...sharedTrips.map((t) => {
         const entry = sharedEntries.find((e) => e.tripId.equals(t._id!));
-        return { ...t, userRole: (entry?.role ?? "viewer") as "editor" | "viewer" };
+        return {
+          ...t,
+          userRole: (entry?.role ?? "viewer") as "editor" | "viewer",
+          membersCount: 1 + (countMap.get(t._id!.toString()) ?? 0),
+        };
       }),
     ];
 

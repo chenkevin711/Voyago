@@ -185,7 +185,10 @@ export type Itinerary = {
   transportationNotes?: string;
   navigationPlans?: any[];
   accommodations?: any[];
+  /** @deprecated use accommodationsByDest instead */
   selectedAccommodation?: any;
+  /** Per-destination accommodation map. Key is the destination name. */
+  accommodationsByDest?: Record<string, any>;
   estimatedTotal?: number;
   members?: number;
   events?: ItineraryEvent[];
