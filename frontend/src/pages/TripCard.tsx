@@ -8,8 +8,10 @@ import {
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 
+type TripAccessRole = "owner" | "editor" | "viewer";
+
 type TripCardProps = {
-    trip: { id: string; name: string; dates: string; members: number; isSavedTrip?: boolean };
+    trip: { id: string; name: string; dates: string; members: number; isSavedTrip?: boolean; userRole?: TripAccessRole };
     onDelete?: (id: string) => void;
 };
 
@@ -49,11 +51,18 @@ export default function TripCard({ trip, onDelete }: TripCardProps) {
                         variant="outlined"
                     />
                     <Chip
-                        label={`${trip.members} member${trip.members === 1 ? "" : "s"
-                            }`}
+                        label={`${trip.members} member${trip.members === 1 ? "" : "s"}`}
                         size="small"
                         variant="outlined"
                     />
+                    {trip.userRole && trip.userRole !== "owner" && (
+                        <Chip
+                            label={trip.userRole}
+                            size="small"
+                            color={trip.userRole === "editor" ? "secondary" : "default"}
+                            variant="filled"
+                        />
+                    )}
                 </Stack>
             </Box>
 

@@ -27,12 +27,15 @@ const initialSampleTrips = [
 
 type SortKey = "name" | "members";
 
+type TripAccessRole = "owner" | "editor" | "viewer";
+
 type DashboardTrip = {
   id: string; // Mongo _id (string) OR sample id
   name: string;
   dates: string;
   members: number;
   isSavedTrip?: boolean; // true => Mongo/DB trip
+  userRole?: TripAccessRole;
 };
 
 export default function Dashboard() {
@@ -65,6 +68,7 @@ export default function Dashboard() {
           dates: formatDateRange(t.startDate, t.endDate),
           members: t.membersCount ?? 1, // safe default
           isSavedTrip: true,
+          userRole: (t.userRole as TripAccessRole) ?? "owner",
         }));
 
         setStoredTrips(mapped);
@@ -100,11 +104,18 @@ export default function Dashboard() {
   async function removeTrip(id: string) {
     setLoadError(null);
 
-    const isMongoTrip = storedTrips.some((t) => t.id === id);
+    const trip = storedTrips.find((t) => t.id === id);
+    const isMongoTrip = !!trip;
 
     // Sample trips: remove from sample state
     if (!isMongoTrip) {
       setSampleTrips((prev) => prev.filter((t) => t.id !== id));
+      return;
+    }
+
+    // Mongo trips: only owners can delete
+    if (trip.userRole && trip.userRole !== "owner") {
+      setLoadError("Only the trip owner can delete this trip.");
       return;
     }
 

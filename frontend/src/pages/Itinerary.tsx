@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -18,6 +18,7 @@ import { APIProvider, AdvancedMarker, InfoWindow, Map, Pin } from "@vis.gl/react
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
 import { formatDateRange } from "../tripPlanning";
+import { useTripSocket } from "../hooks/useTripSocket";
 
 type MarkerPoint = {
   id: string;
@@ -127,8 +128,13 @@ export default function Itinerary() {
   const { tripId } = useParams();
   const [refresh, setRefresh] = useState(0);
   const [trip, setTrip] = useState<DbTrip | null>(null);
+  const [userRole, setUserRole] = useState<"owner" | "editor" | "viewer">("viewer");
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  const { emitTripUpdate, onTripUpdate } = useTripSocket(tripId);
+  // Track whether an incoming socket update caused the last refresh to avoid echo
+  const skipEmitRef = useRef(false);
 
   const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
   const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
@@ -162,6 +168,7 @@ export default function Itinerary() {
         }
 
         setTrip(data);
+        setUserRole(data.userRole ?? "viewer");
       } catch {
         setTrip(null);
       } finally {
@@ -169,6 +176,18 @@ export default function Itinerary() {
       }
     })();
   }, [tripId, refresh]);
+
+  // Subscribe to live itinerary updates from collaborators
+  useEffect(() => {
+    const unsub = onTripUpdate((payload) => {
+      if (payload.section !== "itinerary") return;
+      skipEmitRef.current = true;
+      setTrip((prev) =>
+        prev ? { ...prev, itinerary: { ...prev.itinerary, ...payload.data } as any } : prev
+      );
+    });
+    return unsub;
+  }, [onTripUpdate]);
 
   const destinations = useMemo(() => {
     if (!trip) return [];
@@ -236,11 +255,20 @@ export default function Itinerary() {
       body: JSON.stringify({ itinerary: patch }),
     });
 
-    setRefresh((v) => v + 1);
-
     if (!res.ok) {
+      setRefresh((v) => v + 1);
       return;
     }
+
+    const updated = await res.json();
+    // Update local state directly from the response
+    setTrip(updated);
+
+    // Broadcast to collaborators unless this came from a socket event
+    if (!skipEmitRef.current) {
+      emitTripUpdate("itinerary", updated.itinerary ?? patch);
+    }
+    skipEmitRef.current = false;
   }
 
   function buildMealEvent(
@@ -550,6 +578,12 @@ export default function Itinerary() {
               )}
             </Paper>
 
+            {userRole === "viewer" && (
+              <Alert severity="info" sx={{ borderRadius: 2 }}>
+                You have view-only access to this trip. Edits are disabled.
+              </Alert>
+            )}
+
             <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
               <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Selected Attractions</Typography>
               {selectedAttractions.length === 0 ? (
@@ -560,41 +594,45 @@ export default function Itinerary() {
                     <Chip
                       key={attraction.name}
                       label={attraction.name}
-                      onDelete={() => deleteAttraction(attraction.name)}
+                      onDelete={userRole !== "viewer" ? () => deleteAttraction(attraction.name) : undefined}
                     />
                   ))}
                 </Stack>
               )}
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
-              <Stack
-                direction={{ xs: "column", sm: "row" }}
-                spacing={1.5}
-                justifyContent="space-between"
-                alignItems={{ xs: "flex-start", sm: "center" }}
-              >
-                <Box>
-                  <Typography sx={{ fontWeight: 700 }}>Smart Itinerary Builder</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Generate a day-by-day itinerary with attractions, meal breaks, travel buffers, and pacing.
-                  </Typography>
-                </Box>
+            {userRole !== "viewer" && (
+              <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3 }}>
+                <Stack
+                  direction={{ xs: "column", sm: "row" }}
+                  spacing={1.5}
+                  justifyContent="space-between"
+                  alignItems={{ xs: "flex-start", sm: "center" }}
+                >
+                  <Box>
+                    <Typography sx={{ fontWeight: 700 }}>Smart Itinerary Builder</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Generate a day-by-day itinerary with attractions, meal breaks, travel buffers, and pacing.
+                    </Typography>
+                  </Box>
 
-                <Button variant="contained" onClick={autoGenerateItinerary} disabled={generating}>
-                  {generating ? "Generating..." : "Auto Generate"}
-                </Button>
-              </Stack>
-            </Paper>
+                  <Button variant="contained" onClick={autoGenerateItinerary} disabled={generating}>
+                    {generating ? "Generating..." : "Auto Generate"}
+                  </Button>
+                </Stack>
+              </Paper>
+            )}
 
             <Box sx={{ display: "grid", gap: 1.5 }}>
               {itineraryDays.map((day, dayIndex) => (
                 <Paper key={day.label} elevation={0} sx={{ p: 2, borderRadius: 2 }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
                     <Typography sx={{ fontWeight: 700 }}>{day.label}</Typography>
-                    <Button size="small" variant="outlined" onClick={() => openAddEvent(dayIndex)}>
-                      + Add event
-                    </Button>
+                    {userRole !== "viewer" && (
+                      <Button size="small" variant="outlined" onClick={() => openAddEvent(dayIndex)}>
+                        + Add event
+                      </Button>
+                    )}
                   </Stack>
 
                   {(eventsByDay[dayIndex] ?? []).length === 0 ? (
@@ -634,14 +672,16 @@ export default function Itinerary() {
                               )}
                             </Box>
 
-                            <Stack direction="row" spacing={1}>
-                              <Button size="small" variant="text" onClick={() => openEditEvent(ev)}>
-                                Edit
-                              </Button>
-                              <Button size="small" color="error" variant="text" onClick={() => deleteEvent(ev.id)}>
-                                Delete
-                              </Button>
-                            </Stack>
+                            {userRole !== "viewer" && (
+                              <Stack direction="row" spacing={1}>
+                                <Button size="small" variant="text" onClick={() => openEditEvent(ev)}>
+                                  Edit
+                                </Button>
+                                <Button size="small" color="error" variant="text" onClick={() => deleteEvent(ev.id)}>
+                                  Delete
+                                </Button>
+                              </Stack>
+                            )}
                           </Stack>
                         </Paper>
                       ))}

@@ -5,9 +5,13 @@ import { APIProvider, AdvancedMarker, InfoWindow, Map, Pin } from "@vis.gl/react
 import axios from "axios";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
+import TripAccessPanel from "../components/TripAccessPanel";
 import { deletePlannedTrip, formatDateRange, getPlannedTripById, type PlannedTrip } from "../tripPlanning";
+import { useTripSocket, type TripPresenceUser } from "../hooks/useTripSocket";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
+
+type TripAccessRole = "owner" | "editor" | "viewer";
 
 function toCurrency(amount: number): string {
   return `$${Number(amount || 0).toLocaleString()}`;
@@ -62,6 +66,7 @@ export default function TripOverview() {
   const { tripId } = useParams();
 
   const [trip, setTrip] = useState<PlannedTrip | undefined>(undefined);
+  const [userRole, setUserRole] = useState<TripAccessRole>("viewer");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -70,6 +75,12 @@ export default function TripOverview() {
   const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
   const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
   const [selected, setSelected] = useState<{ label: string; position: { lat: number; lng: number } } | null>(null);
+
+  // Live presence tracking
+  const [presenceUsers, setPresenceUsers] = useState<TripPresenceUser[]>([]);
+
+  // Trip socket for real-time collaboration
+  const { onTripUpdate, onPresenceUpdate } = useTripSocket(isMongoTrip ? tripId : undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +104,7 @@ export default function TripOverview() {
         if (cancelled) return;
 
         setTrip(mapApiTripToPlannedTrip(res.data));
+        setUserRole((res.data.userRole as TripAccessRole) ?? "viewer");
         setIsMongoTrip(true);
         setLoading(false);
         return;
@@ -105,6 +117,7 @@ export default function TripOverview() {
         if (cancelled) return;
 
         setTrip(found);
+        setUserRole("owner");
         setIsMongoTrip(false);
       } catch (e: any) {
         if (cancelled) return;
@@ -122,6 +135,39 @@ export default function TripOverview() {
       cancelled = true;
     };
   }, [tripId]);
+
+  // Subscribe to live trip updates from other collaborators
+  useEffect(() => {
+    const unsub = onTripUpdate((payload) => {
+      if (payload.section === "details") {
+        setTrip((prev) => (prev ? { ...prev, ...mapApiTripToPlannedTrip({ ...payload.data }) } : prev));
+      } else if (payload.section === "itinerary") {
+        setTrip((prev) =>
+          prev
+            ? {
+                ...prev,
+                selectedAttractions: payload.data?.selectedAttractions ?? prev.selectedAttractions,
+                selectedFlight: payload.data?.selectedFlight ?? prev.selectedFlight,
+                selectedAccommodation: payload.data?.selectedAccommodation ?? prev.selectedAccommodation,
+              }
+            : prev
+        );
+      } else if (payload.section === "budget") {
+        setTrip((prev) =>
+          prev ? { ...prev, budget: getBudgetNumber(payload.data) } : prev
+        );
+      }
+    });
+    return unsub;
+  }, [onTripUpdate]);
+
+  // Subscribe to presence updates
+  useEffect(() => {
+    const unsub = onPresenceUpdate((payload) => {
+      if (payload.tripId === tripId) setPresenceUsers(payload.users);
+    });
+    return unsub;
+  }, [onPresenceUpdate, tripId]);
 
   const points = useMemo(() => {
     return (trip?.destinations ?? []).map((destination, index) => ({
@@ -181,12 +227,22 @@ export default function TripOverview() {
                 </Typography>
 
                 <Typography variant="caption" color="text.secondary">
-                  Source: {isMongoTrip ? "Saved trip (database)" : "Planned trip (local)"}
+                  Source: {isMongoTrip ? "Saved trip (database)" : "Planned trip (local)"} •{" "}
+                  Your role: <b>{userRole}</b>
                 </Typography>
               </Stack>
             </Paper>
 
-            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, mb: 2 }}>
+            {/* Collaboration panel — only for DB-backed trips */}
+            {isMongoTrip && (
+              <TripAccessPanel
+                tripId={tripId!}
+                userRole={userRole}
+                presenceUsers={presenceUsers}
+              />
+            )}
+
+            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, mb: 2, mt: 2 }}>
               <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Trip Map</Typography>
               {!mapsApiKey ? (
                 <Alert severity="info">Add VITE_GOOGLE_API_KEY to view destination pins.</Alert>
@@ -286,9 +342,11 @@ export default function TripOverview() {
               <Button component={RouterLink} to={`/trips/${tripId}/budget`} variant="outlined">
                 Budget
               </Button>
-              <Button color="error" variant="text" onClick={removeTrip}>
-                Delete Trip
-              </Button>
+              {userRole === "owner" && (
+                <Button color="error" variant="text" onClick={removeTrip}>
+                  Delete Trip
+                </Button>
+              )}
             </Box>
           </>
         )}
