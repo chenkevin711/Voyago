@@ -15,11 +15,13 @@
     "type": "commonjs",
     "dependencies": {
         "argon2": "0.44.0",
+        "cookie": "^1.1.1",
         "cookie-parser": "^1.4.7",
         "cors": "^2.8.6",
         "crypto": "^1.0.1",
         "express": "^5.2.1",
-        "mongodb": "latest"
+        "mongodb": "latest",
+        "socket.io": "^4.8.3"
     },
     "devDependencies": {
         "@types/cookie-parser": "^1.4.10",

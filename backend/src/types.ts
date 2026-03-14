@@ -201,7 +201,6 @@ export interface Trip {
 
   title: string;
 
-  // keep your current backend field, and optionally support multiple destinations too
   destination: string;
   destinations?: string[];
 
@@ -224,7 +223,7 @@ export interface GooglePlace {
     id?: string
     displayName?: { text?: string }
     formattedAddress?: string
-    priceLevel?: string          // "PRICE_LEVEL_INEXPENSIVE" | "MODERATE" | "EXPENSIVE" | "VERY_EXPENSIVE"
+    priceLevel?: string
     rating?: number
     userRatingCount?: number
     location?: { latitude?: number; longitude?: number }
@@ -251,9 +250,39 @@ export interface GooglePlacesTextSearchResponse {
 export interface AccommodationResult {
     name: string
     location: string
-    nightlyRate: number          // estimated from priceLevel; real pricing requires a booking API
+    nightlyRate: number
     rating?: number
     userRatingCount?: number
     placeId?: string
     source: "google_places"
+}
+
+
+export interface Message {
+  _id?: ObjectId;
+  from_id: ObjectId;
+  to_id: ObjectId;
+  content: string;
+  read: boolean;
+  created_at: Date;
+}
+
+/** Shape emitted over the socket for a new message */
+export interface SocketMessage {
+  id: string;
+  fromId: string;
+  toId: string;
+  fromUsername: string;
+  content: string;
+  createdAt: string;
+}
+
+/** Summary of a conversation with one other user */
+export interface ConversationSummary {
+  userId: string;
+  username: string;
+  profile_picture_url?: string;
+  lastMessage: string;
+  lastMessageAt: string;
+  unreadCount: number;
 }
