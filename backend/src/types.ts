@@ -185,7 +185,10 @@ export type Itinerary = {
   transportationNotes?: string;
   navigationPlans?: any[];
   accommodations?: any[];
+  /** @deprecated use accommodationsByDest instead */
   selectedAccommodation?: any;
+  /** Per-destination accommodation map. Key is the destination name. */
+  accommodationsByDest?: Record<string, any>;
   estimatedTotal?: number;
   members?: number;
   events?: ItineraryEvent[];
@@ -285,4 +288,31 @@ export interface ConversationSummary {
   lastMessage: string;
   lastMessageAt: string;
   unreadCount: number;
+}
+
+// ===== Trip Access / Collaboration Types =====
+
+export type TripAccessRole = "owner" | "editor" | "viewer";
+
+export interface TripAccess {
+  _id?: ObjectId;
+  tripId: ObjectId;
+  userId: ObjectId;
+  role: Exclude<TripAccessRole, "owner">; // "editor" | "viewer" (owner is implicit via trip.userId)
+  invitedBy: ObjectId;
+  createdAt: Date;
+}
+
+/** Socket payload broadcast when a trip section is updated */
+export interface TripUpdatePayload {
+  tripId: string;
+  section: "details" | "itinerary" | "budget";
+  data: any;
+  updatedBy: { userId: string; username: string };
+}
+
+/** Presence entry for a user currently viewing a trip */
+export interface TripPresenceUser {
+  userId: string;
+  username: string;
 }

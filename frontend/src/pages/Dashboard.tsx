@@ -19,29 +19,24 @@ import { formatDateRange } from "../tripPlanning";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
-const initialSampleTrips = [
-  { id: "paris2026", name: "Paris + London", dates: "Mar 12–20", members: 4 },
-  { id: "tokyo", name: "Tokyo Food Trip", dates: "Apr 3–9", members: 2 },
-  { id: "miami", name: "Miami Relax Week", dates: "May 1–6", members: 3 },
-];
-
 type SortKey = "name" | "members";
 
+type TripAccessRole = "owner" | "editor" | "viewer";
+
 type DashboardTrip = {
-  id: string; // Mongo _id (string) OR sample id
+  id: string;
   name: string;
   dates: string;
   members: number;
-  isSavedTrip?: boolean; // true => Mongo/DB trip
+  isSavedTrip?: boolean;
+  userRole?: TripAccessRole;
 };
 
 export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortKey>("name");
 
-  const [storedTrips, setStoredTrips] = useState<DashboardTrip[]>([]);
-  const [sampleTrips, setSampleTrips] = useState<DashboardTrip[]>(initialSampleTrips);
-
+  const [trips, setTrips] = useState<DashboardTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -63,29 +58,24 @@ export default function Dashboard() {
           id: t._id,
           name: t.title,
           dates: formatDateRange(t.startDate, t.endDate),
-          members: t.membersCount ?? 1, // safe default
+          members: t.membersCount ?? 1,
           isSavedTrip: true,
+          userRole: (t.userRole as TripAccessRole) ?? "owner",
         }));
 
-        setStoredTrips(mapped);
+        setTrips(mapped);
       } catch (e: any) {
         if (cancelled) return;
-
-        const msg = e?.response?.data?.error ?? e?.message ?? "Failed to load trips";
-        setLoadError(msg);
-        setStoredTrips([]);
+        setLoadError(e?.response?.data?.error ?? e?.message ?? "Failed to load trips");
+        setTrips([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
     loadTrips();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
-
-  const trips = useMemo(() => [...storedTrips, ...sampleTrips], [storedTrips, sampleTrips]);
 
   const filteredTrips = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -100,20 +90,17 @@ export default function Dashboard() {
   async function removeTrip(id: string) {
     setLoadError(null);
 
-    const isMongoTrip = storedTrips.some((t) => t.id === id);
+    const trip = trips.find((t) => t.id === id);
+    if (!trip) return;
 
-    // Sample trips: remove from sample state
-    if (!isMongoTrip) {
-      setSampleTrips((prev) => prev.filter((t) => t.id !== id));
+    if (trip.userRole && trip.userRole !== "owner") {
+      setLoadError("Only the trip owner can delete this trip.");
       return;
     }
 
-    // Mongo trips: call backend then remove from stored state
     try {
-      await axios.delete(`${API_BASE}/api/trips/${id}`, {
-        withCredentials: true,
-      });
-      setStoredTrips((prev) => prev.filter((t) => t.id !== id));
+      await axios.delete(`${API_BASE}/api/trips/${id}`, { withCredentials: true });
+      setTrips((prev) => prev.filter((t) => t.id !== id));
     } catch (e: any) {
       setLoadError(e?.response?.data?.error ?? e?.message ?? "Failed to delete trip");
     }
@@ -125,15 +112,15 @@ export default function Dashboard() {
         title="Your Trips"
         subtitle="Create a new trip or jump back into planning."
         right={
-  <Stack direction="row" spacing={1}>
-    <Button component={RouterLink} to="/calendar" variant="outlined">
-      Calendar
-    </Button>
-    <Button component={RouterLink} to="/trips/new" variant="contained">
-      + New Trip
-    </Button>
-  </Stack>
-}
+          <Stack direction="row" spacing={1}>
+            <Button component={RouterLink} to="/calendar" variant="outlined">
+              Calendar
+            </Button>
+            <Button component={RouterLink} to="/trips/new" variant="contained">
+              + New Trip
+            </Button>
+          </Stack>
+        }
       >
         <Container maxWidth="lg" disableGutters>
           {loadError && (
@@ -196,10 +183,10 @@ export default function Dashboard() {
               }}
             >
               <Typography variant="h6" sx={{ mb: 1 }}>
-                No trips found
+                No trips yet
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Try a different search, or create your first trip.
+                Create your first trip to get started.
               </Typography>
               <Button component={RouterLink} to="/trips/new" variant="contained">
                 + New Trip

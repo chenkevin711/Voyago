@@ -15,6 +15,7 @@ import axios from "axios";
 import AppLayout from "../components/AppLayout";
 import Page from "../components/Page";
 import { formatDateRange, getPlannedTripById, tripNights, type PlannedTrip } from "../tripPlanning";
+import { useTripSocket } from "../hooks/useTripSocket";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
 
@@ -97,10 +98,13 @@ export default function Budget() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [isMongoTrip, setIsMongoTrip] = useState(false);
+  const [userRole, setUserRole] = useState<"owner" | "editor" | "viewer">("viewer");
 
   const [budgetInput, setBudgetInput] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const { emitTripUpdate, onTripUpdate } = useTripSocket(isMongoTrip ? tripId : undefined);
 
   const mapsApiKey = import.meta.env.VITE_GOOGLE_API_KEY as string | undefined;
   const mapId = import.meta.env.VITE_GOOGLE_MAP_ID as string | undefined;
@@ -141,6 +145,7 @@ export default function Budget() {
 
         setTrip(mapped);
         setIsMongoTrip(true);
+        setUserRole((t.userRole as "owner" | "editor" | "viewer") ?? "viewer");
         setBudgetInput(String(mapped.budget ?? 0));
         setLoading(false);
         return;
@@ -175,6 +180,19 @@ export default function Budget() {
       cancelled = true;
     };
   }, [tripId]);
+
+  // Subscribe to live budget updates from collaborators
+  useEffect(() => {
+    const unsub = onTripUpdate((payload) => {
+      if (payload.section !== "budget") return;
+      const newBudget = typeof payload.data?.budget === "number"
+        ? payload.data.budget
+        : payload.data?.computed?.plannedTotal ?? 0;
+      setBudgetInput(String(newBudget));
+      setTrip((prev) => (prev ? { ...prev, budget: newBudget } : prev));
+    });
+    return unsub;
+  }, [onTripUpdate]);
 
   const breakdown = useMemo(() => {
   if (!trip) return [];
@@ -233,7 +251,12 @@ export default function Budget() {
 
     try {
       if (isMongoTrip) {
-        await axios.patch(`${API_BASE}/api/trips/${tripId}`, { budget: parsedBudget }, { withCredentials: true });
+        const res = await axios.patch(
+          `${API_BASE}/api/trips/${tripId}`,
+          { budget: parsedBudget },
+          { withCredentials: true }
+        );
+        emitTripUpdate("budget", { budget: parsedBudget, ...res.data?.budget });
       } else {
         const ok = updateLocalPlannedTripBudget(tripId, parsedBudget);
         if (!ok) throw new Error("Could not persist locally (plannedTrips not found).");
@@ -300,17 +323,20 @@ export default function Budget() {
                     error={saveStatus === "error" && !budgetIsValid}
                     helperText={!budgetIsValid ? "Enter a non-negative number" : " "}
                     sx={{ maxWidth: 260 }}
+                    disabled={userRole === "viewer"}
                   />
 
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    <Button variant="outlined" onClick={applySuggested} disabled={!suggestion || saveStatus === "saving"}>
-                      Use suggested
-                    </Button>
+                  {userRole !== "viewer" && (
+                    <Stack direction="row" spacing={1} flexWrap="wrap">
+                      <Button variant="outlined" onClick={applySuggested} disabled={!suggestion || saveStatus === "saving"}>
+                        Use suggested
+                      </Button>
 
-                    <Button variant="contained" onClick={saveBudget} disabled={saveStatus === "saving" || !budgetIsValid}>
-                      {saveStatus === "saving" ? "Saving…" : "Save"}
-                    </Button>
-                  </Stack>
+                      <Button variant="contained" onClick={saveBudget} disabled={saveStatus === "saving" || !budgetIsValid}>
+                        {saveStatus === "saving" ? "Saving…" : "Save"}
+                      </Button>
+                    </Stack>
+                  )}
                 </Stack>
 
                 {saveError && (
@@ -325,8 +351,14 @@ export default function Budget() {
                 )}
 
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                  Source: {isMongoTrip ? "Saved trip (database)" : "Planned trip (local)"}
+                  Source: {isMongoTrip ? "Saved trip (database)" : "Planned trip (local)"} • Your role:{" "}
+                  <b>{userRole}</b>
                 </Typography>
+                {userRole === "viewer" && (
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    You have view-only access. Budget edits are disabled.
+                  </Alert>
+                )}
               </Stack>
             </Paper>
 
