@@ -21,6 +21,7 @@ export function DestinationsStepSection(props: {
     mapsApiKey?: string
     mapId?: string
     resolvedPlaces: ResolvedPlace[]
+    daysWarning?: string
     onDestinationInputChange: (value: string) => void
     onDestinationDaysInputChange: (value: string) => void
     onAddDestination: () => void
@@ -98,6 +99,10 @@ export function DestinationsStepSection(props: {
                     </Paper>
                 ))}
             </Stack>
+
+            {props.daysWarning && (
+                <Alert severity="warning">{props.daysWarning}</Alert>
+            )}
 
             <Alert severity="info">
                 Tip: Flights results are best when destinations are IATA metro/airport codes (ex: PAR, ROM, BCN).

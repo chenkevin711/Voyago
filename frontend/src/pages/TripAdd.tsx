@@ -254,6 +254,10 @@ export default function TripAdd() {
         [startDate, endDate]
     )
     const datesValid = !startError && !endError && Boolean(startDate) && Boolean(endDate)
+    const totalDestDays = destinationStops.reduce((sum, s) => sum + s.days, 0)
+    const daysWarning = datesValid && destinationStops.length > 0 && totalDestDays !== nights
+        ? `Total days at destinations (${totalDestDays}) does not match the trip length (${nights} night${nights === 1 ? "" : "s"}).`
+        : undefined
     const inferredCountry = useMemo(() => {
     const first = resolvedPlaces[0]
     return getCountryFromFormattedAddress(first?.formattedAddress)
@@ -283,8 +287,11 @@ const starterSuggestion = useMemo(() => {
     transportMode === "flight"
         ? (selectedFlightsTotal > 0 ? selectedFlightsTotal : (selectedFlight?.price ?? 0))
         : navigationCost
-    const stayCost = Object.values(selectedAccommodationByDest).reduce(
-        (sum, stay) => sum + stay.nightlyRate * nights,
+    const stayCost = Object.entries(selectedAccommodationByDest).reduce(
+        (sum, [dest, stay]) => {
+            const destNights = destinationStops.find((s) => s.name === dest)?.days ?? nights
+            return sum + stay.nightlyRate * destNights
+        },
         0
     )
     const attractionCost = Object.values(selectedAttractionsByDest)
@@ -877,6 +884,7 @@ useEffect(() => {
                 transportMode,
                 navigationPlans,
                 selectedAccommodation: Object.values(selectedAccommodationByDest)[0],
+                accommodationsByDest: selectedAccommodationByDest,
                 selectedAttractions: Object.values(selectedAttractionsByDest)
                   .flat()
                   .map((a) => ({
@@ -1083,6 +1091,7 @@ useEffect(() => {
                                 mapsApiKey={mapsApiKey}
                                 mapId={mapId}
                                 resolvedPlaces={resolvedPlaces}
+                                daysWarning={daysWarning}
                                 onDestinationInputChange={setDestinationInput}
                                 onDestinationDaysInputChange={setDestinationDaysInput}
                                 onAddDestination={addDestination}
@@ -1440,6 +1449,7 @@ useEffect(() => {
                                     const isLoading = accommodationsLoadingByDest[dest] ?? false
                                     const error = accommodationsErrorByDest[dest] ?? null
                                     const selectedForDest = selectedAccommodationByDest[dest]
+                                    const destNights = destinationStops.find((s) => s.name === dest)?.days ?? nights
 
                                     return (
                                         <Stack key={dest} spacing={2}>
@@ -1496,7 +1506,7 @@ useEffect(() => {
                                                                     <Typography sx={{ fontWeight: 700 }}>{stay.name}</Typography>
                                                                     <Typography color="text.secondary" variant="body2">{stay.location}</Typography>
                                                                     <Typography sx={{ mt: 0.5 }}>
-                                                                        {toCurrency(stay.nightlyRate)} / night × {nights} nights
+                                                                        {toCurrency(stay.nightlyRate)} / night × {destNights} night{destNights === 1 ? "" : "s"}
                                                                     </Typography>
                                                                 </Box>
 

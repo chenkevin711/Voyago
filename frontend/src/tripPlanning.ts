@@ -76,6 +76,7 @@ export type PlannedTrip = {
 
   accommodations?: StayOption[];
   selectedAccommodation?: StayOption;
+  accommodationsByDest?: Record<string, StayOption>;
 
   attractions?: AttractionOption[];
   selectedAttractions: AttractionOption[];
@@ -106,6 +107,7 @@ function mongoToPlannedTrip(doc: any): PlannedTrip {
     navigationPlans: doc.itinerary?.navigationPlans ?? [],
     accommodations: doc.itinerary?.accommodations ?? [],
     selectedAccommodation: doc.itinerary?.selectedAccommodation ?? undefined,
+    accommodationsByDest: doc.itinerary?.accommodationsByDest ?? {},
     attractions: doc.itinerary?.attractions ?? [],
     selectedAttractions: doc.itinerary?.selectedAttractions ?? [],
     estimatedTotal: doc.itinerary?.estimatedTotal ?? 0,
@@ -149,6 +151,7 @@ export async function savePlannedTrip(trip: PlannedTrip): Promise<PlannedTrip> {
       navigationPlans: trip.navigationPlans ?? [],
       accommodations: trip.accommodations ?? [],
       selectedAccommodation: trip.selectedAccommodation ?? null,
+      accommodationsByDest: trip.accommodationsByDest ?? {},
       attractions: trip.attractions ?? [],
       selectedAttractions: trip.selectedAttractions ?? [],
       estimatedTotal: trip.estimatedTotal ?? 0,
@@ -195,6 +198,7 @@ export async function updatePlannedTrip(
       navigationPlans: next.navigationPlans ?? [],
       accommodations: next.accommodations ?? [],
       selectedAccommodation: next.selectedAccommodation ?? null,
+      accommodationsByDest: next.accommodationsByDest ?? {},
       attractions: next.attractions ?? [],
       selectedAttractions: next.selectedAttractions ?? [],
       estimatedTotal: next.estimatedTotal ?? 0,
