@@ -279,7 +279,6 @@ const starterSuggestion = useMemo(() => {
     })
 }, [startDate, endDate, datesValid, destinations.length, nights, tripType, travelStyle])
     const selectedFlightsTotal = Object.values(selectedFlightsByLeg).reduce((sum, flight) => sum + (flight.price ?? 0), 0)
-    const flightCost = selectedFlightsTotal > 0 ? selectedFlightsTotal : (selectedFlight?.price ?? 0)
     const navigationCost = navigationPlans.reduce(
     (sum, plan) => sum + (plan.estimatedCost ?? 0),
     0)

@@ -5,7 +5,7 @@ import { Link as RouterLink, useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import { getAxiosErrorMessages } from "../utils";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5001";
+const API_BASE = "https://voyago.hitanshichhabria.com";
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -36,10 +36,13 @@ export default function Signup() {
     setSubmitting(true);
 
     try {
-      const res = await axios.post(`${API_BASE}/api/auth/register`, formData, {
-        withCredentials: true, // ✅ sets httpOnly token cookie
-      });
-
+      const res = await axios.post(`${API_BASE}/api/auth/register`, {
+      username: formData.username,
+      email: formData.email,
+      password: formData.password
+    }, {
+  withCredentials: true
+});
       // ✅ keep if you still use userId anywhere in the UI
       if (res.data?.user?.id) {
         localStorage.setItem("userId", res.data.user.id);

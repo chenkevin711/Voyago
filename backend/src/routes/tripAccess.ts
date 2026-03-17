@@ -49,7 +49,7 @@ export async function getTripRole(
 router.get("/:tripId", async (req: Request, res: Response) => {
   try {
     const userId = requireUserId(req);
-    const tripId = toObjectId(req.params.tripId);
+    const tripId = toObjectId(String(req.params.tripId));
 
     const role = await getTripRole(userId, tripId);
     if (!role) return res.status(404).json({ error: "Trip not found or no access" });
@@ -92,7 +92,7 @@ router.get("/:tripId", async (req: Request, res: Response) => {
 router.post("/:tripId", async (req: Request, res: Response) => {
   try {
     const requesterId = requireUserId(req);
-    const tripId = toObjectId(req.params.tripId);
+    const tripId = toObjectId(String(req.params.tripId));
 
     const role = await getTripRole(requesterId, tripId);
     if (role !== "owner") return res.status(403).json({ error: "Only the trip owner can invite collaborators" });
@@ -151,8 +151,8 @@ router.post("/:tripId", async (req: Request, res: Response) => {
 router.patch("/:tripId/:userId", async (req: Request, res: Response) => {
   try {
     const requesterId = requireUserId(req);
-    const tripId = toObjectId(req.params.tripId);
-    const targetUserId = toObjectId(req.params.userId);
+    const tripId = toObjectId(String(req.params.tripId));
+    const targetUserId = toObjectId(String(req.params.userId));
 
     const role = await getTripRole(requesterId, tripId);
     if (role !== "owner") return res.status(403).json({ error: "Only the trip owner can change roles" });
@@ -181,8 +181,8 @@ router.patch("/:tripId/:userId", async (req: Request, res: Response) => {
 router.delete("/:tripId/:userId", async (req: Request, res: Response) => {
   try {
     const requesterId = requireUserId(req);
-    const tripId = toObjectId(req.params.tripId);
-    const targetUserId = toObjectId(req.params.userId);
+    const tripId = toObjectId(String(req.params.tripId));
+    const targetUserId = toObjectId(String(req.params.userId));
 
     const requesterRole = await getTripRole(requesterId, tripId);
     if (!requesterRole) return res.status(404).json({ error: "Trip not found or no access" });

@@ -14,8 +14,9 @@ function getRandomToken() {
 const isProd = process.env.NODE_ENV === "production";
 
 const publicCookieOptions: CookieOptions = {
-  secure: isProd,
-  sameSite: "lax",
+  secure: true,
+  sameSite: "none",
+  path: "/",
 };
 
 const privateCookieOptions: CookieOptions = {

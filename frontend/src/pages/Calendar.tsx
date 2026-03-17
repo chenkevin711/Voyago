@@ -55,11 +55,6 @@ function endOfMonthLocal(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 }
 
-function formatDayHeader(dateOnly: string) {
-  const [y, m, d] = dateOnly.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
 
 function formatTime(iso: string) {
   const dt = new Date(iso);

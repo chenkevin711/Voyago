@@ -53,7 +53,7 @@ router.get("/conversations", async (req: Request, res: Response) => {
     // Aggregate: group by the "other" user, pick latest message + unread count
     const rows = await messagesCol
       .aggregate<{
-        partnerId: ObjectId;
+        _id: ObjectId;
         lastMessage: string;
         lastMessageAt: Date;
         unreadCount: number;
@@ -168,7 +168,7 @@ router.get("/:partnerId", async (req: Request, res: Response) => {
       return;
     }
 
-    const partnerId = parseId(req.params.partnerId);
+    const partnerId = parseId(String(req.params.partnerId));
     if (!partnerId) {
       res.status(400).json({ success: false, message: "Invalid user id" });
       return;

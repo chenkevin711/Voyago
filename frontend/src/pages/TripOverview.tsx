@@ -318,7 +318,7 @@ export default function TripOverview() {
                               }}
                             >
                               <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                                {review.authorName} • {review.rating}/5
+                                {review.author} • {review.rating}/5
                               </Typography>
                               <Typography variant="body2" color="text.secondary">
                                 {review.text || "No review text available."}

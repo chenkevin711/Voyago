@@ -130,7 +130,7 @@ export default function Navbar() {
 
     const [chatOpen, setChatOpen] = useState(false);
     const { onMessage } = useSocket();
-    const { unreadCount, setUnreadCount, refetch: refetchUnread } = useUnreadCount(onMessage, chatOpen);
+    const { unreadCount, refetch: refetchUnread } = useUnreadCount(onMessage, chatOpen);
     const [currentUserId, setCurrentUserId] = useState("");
     useEffect(() => {
         if (!cookies.loggedIn) return;
