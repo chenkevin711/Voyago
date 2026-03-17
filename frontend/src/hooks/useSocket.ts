@@ -39,7 +39,7 @@ export function useSocket(): UseSocketReturn {
 
     if (socketRef.current?.connected) return;
 
-    const socket = io("http://localhost:5001", {
+    const socket = io(import.meta.env.VITE_API_URL ?? "http://localhost:5001", {
       withCredentials: true,
       transports: ["websocket"],
     });
