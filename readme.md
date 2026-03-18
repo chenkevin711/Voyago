@@ -1,27 +1,33 @@
-Voyago – Travel Planning App
+# Voyago – Travel Planning App
 
-Live Application
-
+## Live Application
 https://voyago.hitanshichhabria.com
 
-Running the App Locally
-1. Clone the repository
+---
+
+## Running the App Locally
+
+### 1. Clone the repository
+```bash
 git clone https://github.com/chenkevin711/Voyago.git
 cd Voyago
-2. Start the Backend
+```
+### 2. Run the backend
+```bash
 cd backend
 npm install
 npm run dev
-
-
-3. Start the Frontend (new terminal)
+```
+### 3. Run the Frontend
+```bash
 cd frontend
 npm install
 npm run dev
+```
+### Notes
+```
+1. If you see “Invalid session”, simply log out and log back in
 
+2. The app uses cookies for authentication
 
-Notes
-
-If you see “Invalid session”, simply log out and log back in
-
-The app uses cookies for authentication
+```
